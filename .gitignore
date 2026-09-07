@@ -1,0 +1,145 @@
+# =============================================================================
+# WhatsApp Transaction AI Agent — .gitignore
+# Security-first configuration: secrets and session data MUST NOT enter VCS.
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# SECRETS & ENVIRONMENT — Never commit real credentials
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+
+# ---------------------------------------------------------------------------
+# API CREDENTIALS — Any standalone credential/key files
+# ---------------------------------------------------------------------------
+*.json.key
+service-account*.json
+google-credentials*.json
+credentials.json
+token.json
+
+# ---------------------------------------------------------------------------
+# WHATSAPP SESSION / AUTH DATA
+# Baileys stores QR/auth state here. Committing it = session hijack risk.
+# ---------------------------------------------------------------------------
+auth/
+auth_info/
+auth_info_multi/
+sessions/
+whatsapp-auth/
+whatsapp-session/
+baileys_store.json
+baileys_store_multi.json
+store/
+
+# ---------------------------------------------------------------------------
+# TEMPORARY IMAGES & PROCESSING ARTIFACTS
+# Per NFR-002: temporary images must be deleted after processing.
+# Never commit client payment screenshots.
+# ---------------------------------------------------------------------------
+tmp/
+temp/
+uploads/
+images/
+*.screenshot.png
+*.screenshot.jpg
+*.screenshot.jpeg
+
+# ---------------------------------------------------------------------------
+# LOGS — Runtime audit logs must not pollute the repo
+# ---------------------------------------------------------------------------
+logs/
+*.log
+*.log.*
+
+# ---------------------------------------------------------------------------
+# PYTHON RUNTIME & BUILD
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+coverage/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+.hypothesis/
+.tox/
+.venv/
+venv/
+env/
+ENV/
+pip-wheel-metadata/
+
+# ---------------------------------------------------------------------------
+# NODE.JS / BAILEYS RUNTIME
+# ---------------------------------------------------------------------------
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+.npm/
+dist/
+.output/
+
+# ---------------------------------------------------------------------------
+# CERTIFICATES & PRIVATE KEYS
+# ---------------------------------------------------------------------------
+*.pem
+*.key
+*.crt
+*.cert
+*.p12
+*.pfx
+
+# ---------------------------------------------------------------------------
+# IDE / OS ARTIFACTS
+# ---------------------------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# ---------------------------------------------------------------------------
+# DOCKER (future)
+# ---------------------------------------------------------------------------
+.docker/
+
+# ---------------------------------------------------------------------------
+# n8n LOCAL DATA (if running locally)
+# ---------------------------------------------------------------------------
+.n8n/
+
+# ---------------------------------------------------------------------------
+# OCR TEST FIXTURES CONTAINING REAL CLIENT SCREENSHOTS
+# Synthetic/approved fixtures live in tests/fixtures/ and ARE tracked.
+# Raw client screenshots must never be committed.
+# ---------------------------------------------------------------------------
+tests/fixtures/ocr/raw_client/
+
+# ---------------------------------------------------------------------------
+# MISC
+# ---------------------------------------------------------------------------
+*.bak
+*.backup
+*.orig
+*.tmp
