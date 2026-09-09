@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## 0.3.3 — Stripe verifier runtime acceptance
+- Exercised the real FastAPI Stripe verification endpoint against a disposable
+  read-only Stripe-compatible fixture.
+- Confirmed unauthorized requests return `401` and one exact Cash App match
+  returns `VALID` without exposing credentials.
+
 ## 0.3.2 — n8n runtime acceptance hardening
 - Added structured HTTP 400 responses for invalid v2 webhook events.
 - Verified the v2 export imports with distinct webhook and Stripe credentials.

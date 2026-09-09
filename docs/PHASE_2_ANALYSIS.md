@@ -79,6 +79,11 @@ This exercises the real message handler and n8n client with
 - Requires test mode, exact integer cents, normalized email, date/minute, and
   a single matching charge. Ambiguity returns `UNCLEAR`.
 - Emits a safe audit event with a one-way email hash and no authorization data.
+- The real FastAPI endpoint was exercised against a disposable local
+  Stripe-compatible fixture: missing internal token returned `401`, and a
+  single exact Cash App fixture returned `VALID` with `EXACT_SINGLE_MATCH`.
+- The fixture observed only read-only `GET /v1/customers` and
+  `GET /v1/charges` requests with the configured day bounds.
 
 The endpoint is intentionally disabled by default and has not yet been
 enabled by default. The v2 n8n export now contains the optional connection;
@@ -150,5 +155,6 @@ disabled outside this controlled test.
 - The final retention policy for failed n8n executions needs client approval.
 - The export was verified against n8n `1.100.1`; other n8n versions should be
   re-imported and smoke-tested before activation.
-- Stripe matching is implemented as a gated test-mode service boundary; live
-  Stripe fixtures and formal Phase 4 acceptance are still pending.
+- Stripe matching is implemented and locally fixture-tested as a gated
+  test-mode service boundary; a real Stripe test account/fixture and formal
+  Phase 4 acceptance are still pending.

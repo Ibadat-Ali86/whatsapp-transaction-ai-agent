@@ -59,6 +59,7 @@ Stripe test fixtures remain controlled follow-ups.
 ### Verification
 - [x] n8n duplicate detection tested with repeated message ID
 - [x] server-side Stripe test-mode verifier implemented and unit-tested
+- [x] Stripe verifier endpoint tested with a disposable read-only HTTP fixture
 - [ ] Stripe test-mode live fixtures
 - [ ] verdict engine
 - [ ] Google Sheets test sheet
