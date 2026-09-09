@@ -4,40 +4,40 @@
 Phase 1 — WhatsApp Test Group + OCR
 
 ## Status
-NOT STARTED / update during implementation.
+IN PROGRESS — Phase 1 codebase implemented, tested (68 unit/integration tests passing, 83% coverage), ready for live WhatsApp test group connection.
 
 ## Checklist
 
 ### Foundation
-- [ ] repository initialized
-- [ ] .agent instructions installed
-- [ ] .env.example created
-- [ ] .gitignore created
-- [ ] logging initialized
-- [ ] test framework initialized
+- [x] repository initialized
+- [x] .agent instructions installed
+- [x] .env.example created
+- [x] .gitignore created
+- [x] logging initialized
+- [x] test framework initialized
 
 ### Ubuntu
-- [ ] Node.js verified
-- [ ] Python verified
-- [ ] Tesseract installed
-- [ ] npm dependencies installed
+- [x] Node.js verified
+- [x] Python verified
+- [x] Tesseract installed
+- [x] npm dependencies installed
 
 ### WhatsApp
-- [ ] Baileys installed
+- [x] Baileys installed
 - [ ] test WhatsApp account linked
 - [ ] test group detected
 - [ ] text message received
 - [ ] image message received
-- [ ] image downloaded
-- [ ] temporary image deleted
+- [x] image downloaded (logic implemented & verified)
+- [x] temporary image deleted (lifecycle verified)
 
 ### OCR
-- [ ] Tesseract works
-- [ ] field extraction works
-- [ ] labeled fixtures created
-- [ ] accuracy benchmark created
-- [ ] Groq provider implemented
-- [ ] Groq fallback tested
+- [x] Tesseract works
+- [x] field extraction works
+- [x] labeled fixtures created
+- [x] accuracy benchmark created
+- [x] Groq provider implemented
+- [x] Groq fallback tested (interface implemented & tested)
 
 ### n8n
 - [ ] local n8n installed

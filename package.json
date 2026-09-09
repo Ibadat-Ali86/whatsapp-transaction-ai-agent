@@ -1,0 +1,21 @@
+{
+  "name": "whatsapp-transaction-ai-agent",
+  "version": "1.0.0",
+  "description": "WhatsApp payment screenshot verification agent — AQ Digital LLC",
+  "main": "src/whatsapp/index.js",
+  "type": "commonjs",
+  "engines": { "node": ">=20.0.0" },
+  "scripts": {
+    "start": "node src/whatsapp/index.js",
+    "dev": "node --watch src/whatsapp/index.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.18",
+    "axios": "^1.7.2",
+    "pino": "^9.2.0",
+    "pino-pretty": "^11.2.1",
+    "dotenv": "^16.4.5",
+    "qrcode-terminal": "^0.12.0",
+    "@hapi/boom": "^10.0.1"
+  }
+}

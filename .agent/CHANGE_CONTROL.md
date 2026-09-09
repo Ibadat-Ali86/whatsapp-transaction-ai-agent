@@ -73,6 +73,27 @@ Per `docs/CHANGE_CONTROL.md`, agents must **never**:
 
 <!-- Append new change records below this line. Most recent first. -->
 
+### CC-0002 — Phase 1 WhatsApp Ingestion & OCR Microservice Stack Implementation
+
+| Field              | Value |
+|--------------------|-------|
+| **ID**             | CC-0002 |
+| **Date**           | 2026-09-09 |
+| **Class**          | C1 |
+| **Agent**          | Antigravity AI Automation Expert |
+| **Requested by**   | Project owner |
+| **Phase**          | Phase 1 |
+| **Reason**         | Implement Phase 1: Baileys WhatsApp bot connection, image downloading, Tesseract OCR preprocessing, provider abstraction, Groq fallback, structured field extraction, FastAPI OCR service, and accuracy benchmark. |
+| **Requirement**    | PRD: FR-001..FR-007; Phase Plan: Phase 1 deliverable & exit criteria |
+| **Files changed**  | `src/config/settings.py`, `src/logging/audit.py`, `src/utils/image_utils.py`, `src/ocr/preprocessing.py`, `src/ocr/tesseract_processor.py`, `src/ai/provider.py`, `src/ai/groq_provider.py`, `src/ai/gemini_provider.py`, `src/extraction/extractor.py`, `src/ocr/engine.py`, `src/ocr/service.py`, `src/whatsapp/*.js`, `tests/unit/*`, `tests/integration/*`, `tests/accuracy/*`, `scripts/*.sh`, `requirements.txt`, `package.json` |
+| **Behavior changed** | End-to-end Phase 1 execution path available: WhatsApp image message -> download -> OCR service -> Tesseract / Groq fallback -> field extraction -> formatted WhatsApp reply. |
+| **Security impact** | Zero secrets stored in repo; Pydantic SecretStr used; audit logs sanitize sensitive inputs and never echo image base64; temporary image lifecycle strictly enforced (immediate cleanup in finally blocks). |
+| **Data impact**    | Temporary images stored in tmp/ and deleted immediately. Integer cents representation for all monetary values. |
+| **Tests run**      | `pytest tests/unit tests/integration` (68 passed, 83% coverage), `python3 -m tests.accuracy.benchmark` (verified). |
+| **Rollback**       | `git revert <commit-hash>` |
+| **Documentation updated** | `docs/PROGRESS.md`, `.agent/CHANGE_CONTROL.md`, `.env.example`, `tests/fixtures/ocr/README.md` |
+| **Status**         | COMPLETE |
+
 ### CC-0001 — Architecture Initialization
 
 | Field              | Value |

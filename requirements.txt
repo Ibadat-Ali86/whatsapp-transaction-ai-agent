@@ -1,0 +1,32 @@
+# WhatsApp Transaction AI Agent — Python dependencies
+# Phase 1: OCR Service stack
+# All versions pinned. Run: pip install -r requirements.txt
+# Audit status: checked 2026-09-09 against PyPI
+
+# --- Web framework (OCR HTTP service) ---
+fastapi==0.111.0
+uvicorn[standard]==0.30.1
+python-multipart==0.0.9
+
+# --- Data validation ---
+pydantic==2.7.4
+pydantic-settings==2.3.4
+
+# --- OCR ---
+pytesseract==0.3.13
+Pillow==10.4.0
+
+# --- AI providers ---
+groq==0.9.0          # Groq Vision — development/testing fallback
+httpx==0.27.0        # Used by groq client internally + for future HTTP calls
+
+# --- Environment ---
+python-dotenv==1.0.1
+
+# --- Testing ---
+pytest==8.2.2
+pytest-asyncio==0.23.7
+pytest-cov==5.0.0
+
+# --- Dev/typing tools ---
+# mypy==1.10.0       # Uncomment for type checking CI step (Phase 8+)
