@@ -10,7 +10,8 @@
   "scripts": {
     "start": "node src/whatsapp/index.js",
     "dev": "node --watch src/whatsapp/index.js",
-    "test:whatsapp": "node --test tests/unit/whatsapp/*.test.js"
+    "test:whatsapp": "node --test tests/unit/whatsapp/*.test.js",
+    "smoke:n8n": "node scripts/smoke_n8n_adapter.js"
   },
   "dependencies": {
     "@hapi/boom": "^10.0.1",

@@ -53,6 +53,7 @@ Stripe test fixtures remain controlled follow-ups.
 - [x] workflow payload bounds, duplicate guard, and execution-retention hardening added
 - [x] webhook tested with synthetic OCR fixture
 - [x] authenticated webhook tested, including invalid-token rejection
+- [x] synthetic message-handler -> n8n -> OCR -> reply smoke test
 - [ ] Baileys -> n8n -> Baileys tested
 
 ### Verification

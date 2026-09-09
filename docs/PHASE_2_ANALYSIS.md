@@ -58,6 +58,17 @@ WhatsApp image + email caption
 - The live `N8N_ENABLED=true` Baileys -> n8n -> OCR -> Baileys path remains a
   user-controlled WhatsApp acceptance step.
 
+Repeatable synthetic adapter smoke test:
+
+```bash
+N8N_BASE_URL=http://127.0.0.1:5678 \\
+N8N_WEBHOOK_TOKEN="$N8N_WEBHOOK_TOKEN" \\
+npm run smoke:n8n
+```
+
+This exercises the real message handler and n8n client with
+`tests/fixtures/ocr/synthetic_clear_01.png`; it does not connect to WhatsApp.
+
 ### Step 2a — Server-side Stripe test verifier (implemented, gated)
 
 - Added `POST /api/v1/verification/stripe` to the Python service.
