@@ -1,9 +1,10 @@
 import time
-from datetime import datetime, timezone
+import secrets
+from datetime import date, datetime, timezone
 import uvicorn
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Header, Request, HTTPException
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -11,6 +12,7 @@ from src.config.settings import get_settings
 from src.logging.audit import AuditLogger
 from src.utils.image_utils import generate_processing_id, base64_to_bytes
 from src.ocr.engine import OCREngine
+from src.verification.stripe_verifier import PaymentEvidence, StripeVerifier, normalize_email
 
 logger = AuditLogger("ocr_service")
 
@@ -30,6 +32,35 @@ class OCRRequest(BaseModel):
     group_id: str
     sender_jid: str
     caption_email: Optional[str] = None
+
+
+class StripeVerificationRequest(BaseModel):
+    processing_id: str = Field(..., min_length=1, max_length=128)
+    email: str = Field(..., min_length=3, max_length=512)
+    amount_cents: int = Field(..., gt=0, le=100_000_000)
+    payment_date: date
+    minutes: int = Field(..., ge=0, le=59)
+    payment_hour: Optional[int] = Field(default=None, ge=0, le=23)
+    currency: str = Field(default="usd", min_length=3, max_length=3)
+    payment_method_type: str = Field(default="cashapp", min_length=1, max_length=32)
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, value: str) -> str:
+        return normalize_email(value)
+
+    @field_validator("currency")
+    @classmethod
+    def normalize_currency(cls, value: str) -> str:
+        normalized = value.casefold()
+        if not normalized.isalpha():
+            raise ValueError("currency must contain letters only")
+        return normalized
+
+    @field_validator("payment_method_type")
+    @classmethod
+    def normalize_payment_method_type(cls, value: str) -> str:
+        return value.strip().casefold()
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
@@ -89,6 +120,45 @@ async def process_ocr(request: OCRRequest):
     }
     
     return JSONResponse(content=response_data)
+
+
+@app.post("/api/v1/verification/stripe")
+async def verify_stripe(
+    request: StripeVerificationRequest,
+    internal_service_token: Optional[str] = Header(default=None, alias="X-Internal-Service-Token"),
+):
+    settings = get_settings()
+    if not settings.STRIPE_ENABLED:
+        raise HTTPException(status_code=503, detail="Stripe verification is disabled")
+    configured_service_token = settings.STRIPE_SERVICE_TOKEN.get_secret_value()
+    if not configured_service_token:
+        raise HTTPException(status_code=503, detail="Stripe verification is not configured")
+    if not internal_service_token or not secrets.compare_digest(internal_service_token, configured_service_token):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    verifier = StripeVerifier(
+        settings.STRIPE_SECRET_KEY.get_secret_value(),
+        mode=settings.STRIPE_MODE,
+        base_url=settings.STRIPE_API_BASE_URL,
+        api_version=settings.STRIPE_API_VERSION,
+        timeout_seconds=settings.STRIPE_TIMEOUT_SECONDS,
+        timezone_name=settings.STRIPE_TIMEZONE,
+        max_pages=settings.STRIPE_MAX_PAGES,
+        allowed_payment_method_type=settings.STRIPE_ALLOWED_PAYMENT_METHOD_TYPE,
+    )
+    evidence = PaymentEvidence(
+        email=request.email,
+        amount_cents=request.amount_cents,
+        payment_date=request.payment_date,
+        minutes=request.minutes,
+        payment_hour=request.payment_hour,
+        currency=request.currency,
+        payment_method_type=request.payment_method_type,
+    )
+    result = await verifier.verify(evidence, request.processing_id)
+    if result.status == "ERROR":
+        return JSONResponse(status_code=503, content=result.as_dict())
+    return JSONResponse(content=result.as_dict())
 
 @app.get("/health/live")
 async def health_live():

@@ -37,7 +37,20 @@ class AuditLogger:
             "status": status,
         }
         
-        for key in ["duration_ms", "provider", "message_id", "group_id_hash", "verdict", "error_code", "safe_details"]:
+        for key in [
+            "duration_ms",
+            "provider",
+            "message_id",
+            "group_id_hash",
+            "verdict",
+            "error_code",
+            "safe_details",
+            "stripe_charge_id",
+            "candidate_count",
+            "retryable",
+            "reason_code",
+            "email_hash",
+        ]:
             if key in kwargs and kwargs[key] is not None:
                 audit_data[key] = kwargs[key]
                 
@@ -54,3 +67,19 @@ class AuditLogger:
 
     def log_verdict(self, processing_id: str, verdict: str, **kwargs: Any) -> None:
         self._log(logging.INFO, "VERDICT_GENERATED", "SUCCESS", processing_id, verdict=verdict, **kwargs)
+
+    def log_verification(self, processing_id: str, result: Any, safe_details: str) -> None:
+        self._log(
+            logging.INFO if result.status != "ERROR" else logging.ERROR,
+            "STRIPE_VERIFICATION",
+            result.status,
+            processing_id,
+            provider="stripe",
+            verdict=result.verdict,
+            reason_code=result.reason_code,
+            stripe_charge_id=result.stripe_charge_id,
+            candidate_count=result.candidate_count,
+            retryable=result.retryable,
+            email_hash=result.email_hash,
+            safe_details=safe_details,
+        )

@@ -117,6 +117,25 @@ OCR result:
   "confidence": 0.0
 }
 
+Stripe verification request:
+
+{
+  "processing_id": "...",
+  "email": "customer@example.com",
+  "amount_cents": 2500,
+  "payment_date": "2026-09-09",
+  "minutes": 31,
+  "payment_hour": 14,
+  "currency": "usd",
+  "payment_method_type": "cashapp"
+}
+
+The server-side verifier reads Stripe charges in test mode, paginates within
+the configured local-date window, and approves only one exact match. Multiple
+matches, missing time evidence, mismatched amounts, and API failures remain
+non-approving outcomes. The endpoint requires an internal service token and
+Stripe keys are never accepted from request payloads.
+
 ## Financial data rules
 
 Prefer integer cents or Decimal for money.

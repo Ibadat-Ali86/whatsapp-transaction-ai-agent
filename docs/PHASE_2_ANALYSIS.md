@@ -3,9 +3,10 @@
 ## Scope
 
 Phase 2 introduces n8n as a local orchestration boundary between the Baileys
-transport and the OCR service. It does not implement Stripe verification,
-duplicate detection, Google Sheets, Telegram, or production deployment; those
-remain later phases in `docs/PHASE_PLAN.md`.
+transport and the OCR service. A gated server-side Stripe test-mode verifier
+is also available as the next integration boundary, while formal Stripe
+acceptance, duplicate detection, Google Sheets, Telegram, and production
+deployment remain later phase gates in `docs/PHASE_PLAN.md`.
 
 ## Required flow
 
@@ -49,6 +50,21 @@ WhatsApp image + email caption
 - Run an authenticated webhook test with a synthetic fixture.
 - Enable `N8N_ENABLED=true` and run Baileys -> n8n -> OCR -> Baileys.
 
+### Step 2a — Server-side Stripe test verifier (implemented, gated)
+
+- Added `POST /api/v1/verification/stripe` to the Python service.
+- Accepts structured evidence; Stripe credentials are loaded from server
+  configuration and never from a request.
+- Requires a separate `X-Internal-Service-Token` before any Stripe call.
+- Uses read-only customer and charge list endpoints with pagination.
+- Requires test mode, exact integer cents, normalized email, date/minute, and
+  a single matching charge. Ambiguity returns `UNCLEAR`.
+- Emits a safe audit event with a one-way email hash and no authorization data.
+
+The endpoint is intentionally disabled by default and has not yet been
+connected to the exported n8n workflow. That connection follows local n8n
+acceptance and Stripe test fixtures.
+
 ### Step 3 — Failure and recovery acceptance (pending)
 
 - Invalid/missing caption returns a safe validation error.
@@ -63,5 +79,5 @@ WhatsApp image + email caption
   development machine.
 - Container networking may require replacing `localhost` in the OCR node.
 - The final retention policy for failed n8n executions needs client approval.
-- Stripe matching remains intentionally unimplemented until Phase 4 and must
-  use test mode first.
+- Stripe matching is implemented as a gated test-mode service boundary; live
+  Stripe fixtures and formal Phase 4 acceptance are still pending.

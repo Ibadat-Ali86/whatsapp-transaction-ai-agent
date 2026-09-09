@@ -23,6 +23,10 @@ WhatsApp message identifier.
 is_forwarded
 Boolean forwarded-message flag.
 
+caption_email
+Normalized email supplied as the WhatsApp image caption. Lookup hint only;
+not payment proof.
+
 ## OCR fields
 
 email
@@ -59,6 +63,12 @@ Boolean transaction duplicate result.
 
 stripe_charge_id
 Matching Stripe charge ID.
+
+stripe_match_status
+MATCHED/NO_MATCH/AMBIGUOUS/ERROR.
+
+stripe_reason_code
+Stable safe reason for the Stripe result.
 
 verdict
 VALID/FAKE/DUPLICATE/SUSPICIOUS/UNCLEAR/ERROR.

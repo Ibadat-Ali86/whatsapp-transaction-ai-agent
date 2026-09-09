@@ -54,7 +54,8 @@ pending because n8n is not installed on this machine.
 
 ### Verification
 - [ ] duplicate detection
-- [ ] Stripe test mode
+- [x] server-side Stripe test-mode verifier implemented and unit-tested
+- [ ] Stripe test-mode live fixtures
 - [ ] verdict engine
 - [ ] Google Sheets test sheet
 - [ ] Telegram test bot

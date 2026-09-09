@@ -14,6 +14,16 @@ class Settings(BaseSettings):
     OCR_SERVICE_PORT: int = 8000
     TEMP_DIR: str = 'tmp'
     MAX_IMAGE_SIZE_MB: float = 10.0
+    STRIPE_ENABLED: bool = False
+    STRIPE_SECRET_KEY: SecretStr = SecretStr('')
+    STRIPE_SERVICE_TOKEN: SecretStr = SecretStr('')
+    STRIPE_MODE: str = 'test'
+    STRIPE_API_BASE_URL: str = 'https://api.stripe.com'
+    STRIPE_API_VERSION: str = ''
+    STRIPE_TIMEOUT_SECONDS: float = 15.0
+    STRIPE_TIMEZONE: str = 'UTC'
+    STRIPE_MAX_PAGES: int = 10
+    STRIPE_ALLOWED_PAYMENT_METHOD_TYPE: str = 'cashapp'
 
     model_config = SettingsConfigDict(env_file='.env', env_file_encoding='utf-8', extra='ignore')
 

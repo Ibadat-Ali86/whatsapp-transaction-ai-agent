@@ -88,4 +88,9 @@ For each verdict, store:
 - duplicate result;
 - external API outcome.
 
+Stripe verification audit events may include the processing ID, Stripe charge
+ID when uniquely matched, candidate count, safe reason code, verdict, retryable
+flag, and a one-way email hash. They must not include the Stripe secret,
+authorization headers, raw image data, or the full customer email.
+
 Do not store raw image unless explicitly authorized.
