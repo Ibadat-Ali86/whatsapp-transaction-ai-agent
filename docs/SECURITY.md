@@ -70,6 +70,19 @@ Keep auth/session directory outside version control.
 
 Back it up only through an approved secure mechanism.
 
+## WhatsApp group authorization
+
+Baileys links the WhatsApp account as a device; WhatsApp does not provide a QR-time prompt for selecting groups. The application therefore enforces least privilege with the exact `WHATSAPP_ALLOWED_GROUP_JIDS` allowlist.
+
+This is application-level processing isolation, not account-level WhatsApp visibility. For true account-level isolation, use a dedicated WhatsApp number that is added only to the approved groups.
+
+The allowlist is enforced in two places:
+
+- Baileys filters non-allowlisted group JIDs before emitting group messages to the application. Direct protocol messages remain available because WhatsApp uses them for group sender-key and Signal-session establishment.
+- The application handler checks that the message is from an allowlisted group before downloading media, calling OCR, or sending a reply.
+
+An empty allowlist is fail-closed. The bot may connect for setup, but it must not process messages until at least one approved group JID is configured.
+
 ## n8n
 
 Restrict admin access.

@@ -5,12 +5,17 @@
  * @returns {string} The formatted reply message
  */
 function formatOcrReply(ocrResult, processingId) {
-  const email = ocrResult?.email || 'Not found';
-  const amount = ocrResult?.amount != null ? `$${ocrResult.amount}` : 'Not found';
-  const minutes = ocrResult?.minutes != null ? ocrResult.minutes : 'Not found';
-  const dateStr = ocrResult?.date || 'Not found';
-  const name = ocrResult?.name || 'Not found';
-  const status = ocrResult?.status || 'Not found';
+  // The OCR API returns extracted values under `fields`. Accepting the
+  // legacy top-level shape as well keeps this formatter backward-compatible.
+  const fields = ocrResult?.fields || ocrResult || {};
+  const email = fields.email || 'Not found';
+  const amount = fields.amount_cents != null
+    ? `$${(fields.amount_cents / 100).toFixed(2)}`
+    : fields.amount != null ? `$${fields.amount}` : 'Not found';
+  const minutes = fields.minutes != null ? fields.minutes : 'Not found';
+  const dateStr = fields.payment_date || fields.date || 'Not found';
+  const name = fields.customer_name || fields.name || 'Not found';
+  const status = fields.status || 'Not found';
   const confidence = ocrResult?.confidence != null ? Math.round(ocrResult.confidence * 100) : 0;
   const provider = ocrResult?.provider || 'tesseract';
 

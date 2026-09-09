@@ -4,6 +4,7 @@ const { processImageOCR, OcrServiceError } = require('./ocr-client');
 const { formatOcrReply, formatErrorReply } = require('./reply-formatter');
 const fs = require('fs').promises;
 const crypto = require('crypto');
+const { isAllowedGroupJid, hashGroupJid } = require('./group-access');
 
 /**
  * Orchestrates the processing of incoming WhatsApp messages.
@@ -17,28 +18,29 @@ function createMessageHandler(sock, config, logger) {
     try {
       const messages = messageUpdate.messages;
       for (const msg of messages) {
+        const groupId = msg.key?.remoteJid;
+        if (!isAllowedGroupJid(groupId, config.ALLOWED_GROUP_JIDS)) {
+          logger.debug({ groupIdHash: hashGroupJid(groupId) }, 'Ignoring message outside the WhatsApp group allowlist');
+          continue;
+        }
+
         if (!msg.message || msg.key.fromMe) continue;
         
         const isImage = !!(msg.message.imageMessage || msg.message.extendedTextMessage?.contextInfo?.quotedMessage?.imageMessage);
         if (!isImage) continue;
-
-        const groupId = msg.key.remoteJid;
-        if (config.WHATSAPP_TEST_GROUP_JID && groupId !== config.WHATSAPP_TEST_GROUP_JID) {
-          continue;
-        }
 
         const processingId = generateProcessingId();
         const senderJid = msg.key.participant || msg.key.remoteJid;
         const hashedJid = crypto.createHash('sha256').update(senderJid).digest('hex').substring(0, 10);
         
         const mimeType = msg.message.imageMessage?.mimetype || msg.message.extendedTextMessage?.contextInfo?.quotedMessage?.imageMessage?.mimetype || 'unknown';
-        logger.info({ processingId, messageId: msg.key.id, groupId, senderJid: hashedJid, mimeType }, 'Incoming image message');
+        logger.info({ processingId, messageId: msg.key.id, groupIdHash: hashGroupJid(groupId), senderJid: hashedJid, mimeType }, 'Incoming image message');
 
         let tempPath = null;
         const startTime = Date.now();
 
         try {
-          const { imageBytes, mimeType: downloadedMime, tempPath: tp } = await downloadImage(msg, processingId);
+          const { imageBytes, mimeType: downloadedMime, tempPath: tp } = await downloadImage(sock, msg, processingId);
           tempPath = tp;
           
           const imageBase64 = imageBytes.toString('base64');

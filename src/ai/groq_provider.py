@@ -1,6 +1,7 @@
 import time
 import json
 import base64
+from json import JSONDecodeError
 from typing import Dict, Any
 from groq import Groq
 from src.ai.provider import VisionProvider, AIExtractionResult, AIProviderError
@@ -22,6 +23,37 @@ Return ONLY valid JSON with these exact keys (use null for missing fields):
 }
 
 Return ONLY the JSON object. No explanation, no markdown."""
+
+
+def parse_json_object(raw_text: str) -> Dict[str, Any]:
+    """Parse a JSON object even if a model adds a wrapper around it."""
+    if not isinstance(raw_text, str) or not raw_text.strip():
+        raise ValueError("AI response was empty")
+
+    clean_text = raw_text.strip()
+    clean_text = clean_text.replace('```json', '').replace('```', '').strip()
+
+    # Reasoning-capable models may emit a think/analysis block despite the
+    # requested output format. Remove those blocks before parsing the result.
+    for opening, closing in (("<think>", "</think>"), ("<analysis>", "</analysis>")):
+        while opening in clean_text and closing in clean_text:
+            start = clean_text.index(opening)
+            end = clean_text.index(closing, start) + len(closing)
+            clean_text = (clean_text[:start] + clean_text[end:]).strip()
+
+    decoder = json.JSONDecoder()
+    for index, character in enumerate(clean_text):
+        if character != '{':
+            continue
+        try:
+            parsed, _ = decoder.raw_decode(clean_text[index:])
+        except JSONDecodeError:
+            continue
+        if not isinstance(parsed, dict):
+            raise ValueError("AI response was not a JSON object")
+        return parsed
+
+    raise ValueError("AI response did not contain a valid JSON object")
 
 class GroqVisionProvider(VisionProvider):
     def __init__(self) -> None:
@@ -54,27 +86,31 @@ class GroqVisionProvider(VisionProvider):
                         ]
                     }
                 ],
+                # Qwen 3.6 supports JSON Object Mode. This prevents normal
+                # model prose/reasoning from being mixed into the extraction.
+                response_format={"type": "json_object"},
                 timeout=30.0,
                 temperature=0.0
             )
             
             raw_text = response.choices[0].message.content or ""
             
-            # Attempt to parse JSON safely
+            # Parse defensively because provider responses can still be
+            # wrapped by compatibility layers or contain model artifacts.
             try:
-                # Strip markdown code blocks if any
-                clean_text = raw_text.strip()
-                if clean_text.startswith("```json"):
-                    clean_text = clean_text[7:]
-                if clean_text.startswith("```"):
-                    clean_text = clean_text[3:]
-                if clean_text.endswith("```"):
-                    clean_text = clean_text[:-3]
-                    
-                fields = json.loads(clean_text)
-            except json.JSONDecodeError:
-                fields = {}
-                logger.log_error("AI_EXTRACTION", "JSON_PARSE_ERROR", processing_id, safe_details="Failed to parse Groq response as JSON")
+                fields = parse_json_object(raw_text)
+            except (JSONDecodeError, ValueError) as parse_error:
+                logger.log_error(
+                    "AI_EXTRACTION",
+                    "JSON_PARSE_ERROR",
+                    processing_id,
+                    safe_details=str(parse_error),
+                )
+                raise AIProviderError(
+                    'groq',
+                    retryable=False,
+                    safe_message='Groq returned invalid structured output',
+                ) from parse_error
 
             duration_ms = int((time.time() - start_time) * 1000)
             
@@ -89,8 +125,20 @@ class GroqVisionProvider(VisionProvider):
 
         except Exception as e:
             error_msg = str(e).lower()
-            retryable = "rate limit" in error_msg or "timeout" in error_msg or "connection" in error_msg
-            logger.log_error("AI_EXTRACTION", "API_ERROR", processing_id, safe_details=f"Retryable: {retryable}")
+            status_code = getattr(e, 'status_code', None) or getattr(e, 'status', None)
+            retryable_statuses = {408, 409, 425, 429, 500, 502, 503, 504}
+            retryable = (
+                status_code in retryable_statuses
+                or "rate limit" in error_msg
+                or "timeout" in error_msg
+                or "connection" in error_msg
+            )
+            logger.log_error(
+                "AI_EXTRACTION",
+                "API_ERROR",
+                processing_id,
+                safe_details=f"type={type(e).__name__}; status={status_code or 'unknown'}; retryable={retryable}",
+            )
             raise AIProviderError('groq', retryable=retryable, safe_message='Groq API request failed') from e
 
     def health_check(self) -> bool:

@@ -24,6 +24,7 @@ token.json
 # Baileys stores QR/auth state here. Committing it = session hijack risk.
 # ---------------------------------------------------------------------------
 auth/
+auth.backup-*/
 auth_info/
 auth_info_multi/
 sessions/

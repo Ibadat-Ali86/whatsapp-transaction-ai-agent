@@ -1,7 +1,14 @@
 require('dotenv').config();
+const { parseAllowedGroupJids } = require('./group-access');
+
+const allowedGroupJids = parseAllowedGroupJids(
+  process.env.WHATSAPP_ALLOWED_GROUP_JIDS,
+  process.env.WHATSAPP_TEST_GROUP_JID
+);
 
 const config = {
   OCR_SERVICE_URL: process.env.OCR_SERVICE_URL || 'http://localhost:8000',
+  ALLOWED_GROUP_JIDS: allowedGroupJids,
   WHATSAPP_TEST_GROUP_JID: process.env.WHATSAPP_TEST_GROUP_JID || '',
   LOG_LEVEL: process.env.LOG_LEVEL || 'info',
   AUTH_DIR: process.env.AUTH_DIR || 'auth',
@@ -11,8 +18,8 @@ const config = {
   BOT_REPLY_ENABLED: process.env.BOT_REPLY_ENABLED !== 'false',
 };
 
-if (!config.WHATSAPP_TEST_GROUP_JID) {
-  console.warn('WARNING: WHATSAPP_TEST_GROUP_JID is not set in environment variables. Running in unrestricted mode or may not process messages depending on handler.');
+if (!config.ALLOWED_GROUP_JIDS.length) {
+  console.error('ERROR: No WhatsApp groups are allowlisted. Message processing is fail-closed until WHATSAPP_ALLOWED_GROUP_JIDS is configured.');
 }
 
 module.exports = Object.freeze(config);

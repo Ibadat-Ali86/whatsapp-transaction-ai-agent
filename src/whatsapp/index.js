@@ -13,7 +13,7 @@ async function main() {
 =========================================
 WhatsApp Transaction AI Agent v1.0.0
 OCR Service: ${config.OCR_SERVICE_URL}
-Test Group: ${config.WHATSAPP_TEST_GROUP_JID ? 'configured' : 'not configured'}
+Allowed Groups: ${config.ALLOWED_GROUP_JIDS.length}
 Auth Dir: ${config.AUTH_DIR}/
 =========================================
 `);
@@ -27,15 +27,17 @@ Auth Dir: ${config.AUTH_DIR}/
     logger.info('OCR service is ready.');
   }
 
-  const sock = await createConnection();
-  const messageHandler = createMessageHandler(sock, config, logger);
-
-  sock.ev.on('messages.upsert', messageHandler);
+  const connection = await createConnection({
+    onSocket: (sock) => {
+      const handler = createMessageHandler(sock, config, logger);
+      sock.ev.on('messages.upsert', handler);
+    },
+  });
 
   const shutdown = async (signal) => {
     logger.info({ signal }, 'Graceful shutdown initiated');
     try {
-      sock.ws.close();
+      connection.stop();
       logger.info('WhatsApp socket closed.');
     } catch (err) {
       logger.error({ err }, 'Error closing socket');

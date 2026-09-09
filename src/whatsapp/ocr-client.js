@@ -1,6 +1,7 @@
 const axios = require('axios');
 const config = require('./config');
 const { logger } = require('./logger');
+const { hashGroupJid } = require('./group-access');
 
 class OcrServiceError extends Error {
   constructor(message, retryable = false, detail = null) {
@@ -21,7 +22,7 @@ async function processImageOCR(params, retries = 2) {
   const { imageBase64, mimeType, processingId, messageId, groupId, senderJid } = params;
   
   const startTime = Date.now();
-  logger.info({ processingId, messageId, groupId, senderJid: senderJid.substring(0, 10) + '...' }, 'Sending request to OCR service');
+  logger.info({ processingId, messageId, groupIdHash: hashGroupJid(groupId), senderJid: senderJid.substring(0, 10) + '...' }, 'Sending request to OCR service');
 
   try {
     const response = await axios.post(`${config.OCR_SERVICE_URL}/api/v1/ocr/process`, {
