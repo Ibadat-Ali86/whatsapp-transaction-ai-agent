@@ -40,6 +40,10 @@ test('n8n v2 workflow contains a gated Stripe branch without secret values', () 
   assert.ok(nodeNames.includes('Respond OCR Result'));
   const stripeNode = workflow.nodes.find(node => node.name === 'Stripe Test Verifier');
   assert.equal(stripeNode.credentials.httpHeaderAuth.name, 'OCR service Stripe verifier auth');
+  assert.equal(stripeNode.credentials.httpHeaderAuth.id, 'CONFIGURE_STRIPE_IN_N8N');
+  const webhookNode = workflow.nodes.find(node => node.name === 'WhatsApp Webhook');
+  assert.equal(webhookNode.credentials.httpHeaderAuth.id, 'CONFIGURE_IN_N8N');
+  assert.notEqual(stripeNode.credentials.httpHeaderAuth.id, webhookNode.credentials.httpHeaderAuth.id);
   assert.doesNotMatch(stripeNode.parameters.jsonBody, /image\.base64/);
   assert.match(serialized, /stripe_verification_enabled/);
   assert.match(serialized, /CAPTION_OCR_EMAIL_CONFLICT/);

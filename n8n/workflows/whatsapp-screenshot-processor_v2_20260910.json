@@ -151,7 +151,7 @@
       "position": [1440, 180],
       "credentials": {
         "httpHeaderAuth": {
-          "id": "CONFIGURE_IN_N8N",
+          "id": "CONFIGURE_STRIPE_IN_N8N",
           "name": "OCR service Stripe verifier auth"
         }
       }
