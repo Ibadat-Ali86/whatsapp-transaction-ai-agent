@@ -88,11 +88,18 @@ Incoming image event:
   "sender_jid": "...",
   "received_at": "...",
   "is_forwarded": false,
+  "caption_email": "customer@example.com",
   "image": {
     "mime_type": "image/jpeg",
     "base64": "..."
   }
 }
+
+The WhatsApp intake layer requires every payment screenshot to carry a
+single syntactically valid customer email as its image caption. The caption
+is normalized to lowercase and is the trusted lookup hint for later
+verification; OCR email text remains evidence that must be compared, not
+blindly trusted.
 
 OCR result:
 

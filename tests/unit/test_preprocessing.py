@@ -10,6 +10,7 @@ import pytest
 from PIL import Image
 import io
 from src.ocr.preprocessing import ImagePreprocessor, PreprocessingStrategy
+from src.ocr.tesseract_processor import TesseractProcessor
 
 
 def _bytes_to_pil(image_bytes: bytes) -> Image.Image:
@@ -72,3 +73,14 @@ class TestPreprocessingStrategies:
         for strategy in PreprocessingStrategy:
             result = preprocessor.preprocess(img, strategy)
             assert isinstance(result, Image.Image), f"Strategy {strategy} returned non-Image"
+
+
+class TestTesseractCandidateQuality:
+
+    def test_receipt_shaped_text_scores_higher_than_unstructured_text(self):
+        receipt = (
+            "Email test@example.com Amount $25.00 "
+            "Time: 14:31:00 UTC Date: 2026-09-09 Status Completed"
+        )
+        assert TesseractProcessor._field_quality(receipt) == 5
+        assert TesseractProcessor._field_quality("random OCR text") == 0

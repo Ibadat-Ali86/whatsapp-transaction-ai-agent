@@ -19,10 +19,10 @@ class OcrServiceError extends Error {
  * @returns {Promise<any>} The OCR result
  */
 async function processImageOCR(params, retries = 2) {
-  const { imageBase64, mimeType, processingId, messageId, groupId, senderJid } = params;
+  const { imageBase64, mimeType, processingId, messageId, groupId, senderJid, captionEmail } = params;
   
   const startTime = Date.now();
-  logger.info({ processingId, messageId, groupIdHash: hashGroupJid(groupId), senderJid: senderJid.substring(0, 10) + '...' }, 'Sending request to OCR service');
+  logger.info({ processingId, messageId, groupIdHash: hashGroupJid(groupId), senderJid: String(senderJid || '').substring(0, 10) + '...' }, 'Sending request to OCR service');
 
   try {
     const response = await axios.post(`${config.OCR_SERVICE_URL}/api/v1/ocr/process`, {
@@ -31,7 +31,8 @@ async function processImageOCR(params, retries = 2) {
       processing_id: processingId,
       message_id: messageId,
       group_id: groupId,
-      sender_jid: senderJid
+      sender_jid: senderJid,
+      caption_email: captionEmail || null,
     }, {
       timeout: config.OCR_TIMEOUT_MS
     });

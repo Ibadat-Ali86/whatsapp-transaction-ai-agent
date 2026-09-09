@@ -7,27 +7,29 @@ Tesseract must be installed locally for these to pass.
 """
 from __future__ import annotations
 
-import base64
 import pytest
-from fastapi.testclient import TestClient
-from unittest.mock import patch, MagicMock
+import httpx
 
 from src.ocr.service import app
 
-client = TestClient(app)
+@pytest.fixture
+async def client():
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as test_client:
+        yield test_client
 
 
 class TestHealthEndpoints:
 
-    def test_liveness_returns_ok(self):
-        response = client.get("/health/live")
+    async def test_liveness_returns_ok(self, client):
+        response = await client.get("/health/live")
         assert response.status_code == 200
         body = response.json()
         assert body["status"] == "ok"
         assert "timestamp" in body
 
-    def test_readiness_returns_tesseract_status(self):
-        response = client.get("/health/ready")
+    async def test_readiness_returns_tesseract_status(self, client):
+        response = await client.get("/health/ready")
         assert response.status_code == 200
         body = response.json()
         assert "tesseract" in body
@@ -36,8 +38,8 @@ class TestHealthEndpoints:
 
 class TestOcrProcessEndpoint:
 
-    def test_rejects_invalid_mime_type(self, blank_white_image_base64, processing_id):
-        response = client.post("/api/v1/ocr/process", json={
+    async def test_rejects_invalid_mime_type(self, client, blank_white_image_base64, processing_id):
+        response = await client.post("/api/v1/ocr/process", json={
             "processing_id": processing_id,
             "image_base64": blank_white_image_base64,
             "mime_type": "application/pdf",   # invalid
@@ -47,8 +49,8 @@ class TestOcrProcessEndpoint:
         })
         assert response.status_code == 422
 
-    def test_rejects_invalid_base64(self, processing_id):
-        response = client.post("/api/v1/ocr/process", json={
+    async def test_rejects_invalid_base64(self, client, processing_id):
+        response = await client.post("/api/v1/ocr/process", json={
             "processing_id": processing_id,
             "image_base64": "!!!not-valid!!!",
             "mime_type": "image/png",
@@ -58,12 +60,12 @@ class TestOcrProcessEndpoint:
         })
         assert response.status_code == 422
 
-    def test_processes_valid_png_image(self, blank_white_image_base64, processing_id):
+    async def test_processes_valid_png_image(self, client, blank_white_image_base64, processing_id):
         """
         Blank white image will produce empty OCR — that's correct behaviour.
         We verify the response shape, not OCR accuracy on a blank image.
         """
-        response = client.post("/api/v1/ocr/process", json={
+        response = await client.post("/api/v1/ocr/process", json={
             "processing_id": processing_id,
             "image_base64": blank_white_image_base64,
             "mime_type": "image/png",
@@ -80,9 +82,9 @@ class TestOcrProcessEndpoint:
             assert "confidence" in body
             assert "ai_used" in body
 
-    def test_auto_generates_processing_id_when_missing(self, blank_white_image_base64):
+    async def test_auto_generates_processing_id_when_missing(self, client, blank_white_image_base64):
         """If processing_id is omitted, service must generate one."""
-        response = client.post("/api/v1/ocr/process", json={
+        response = await client.post("/api/v1/ocr/process", json={
             "image_base64": blank_white_image_base64,
             "mime_type": "image/png",
             "message_id": "msg-004",
@@ -94,9 +96,9 @@ class TestOcrProcessEndpoint:
             body = response.json()
             assert body["processing_id"].startswith("wa-")
 
-    def test_response_never_contains_image_data(self, blank_white_image_base64, processing_id):
+    async def test_response_never_contains_image_data(self, client, blank_white_image_base64, processing_id):
         """Security: OCR response must never echo back the raw image base64."""
-        response = client.post("/api/v1/ocr/process", json={
+        response = await client.post("/api/v1/ocr/process", json={
             "processing_id": processing_id,
             "image_base64": blank_white_image_base64,
             "mime_type": "image/png",

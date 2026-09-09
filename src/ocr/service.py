@@ -29,6 +29,7 @@ class OCRRequest(BaseModel):
     message_id: str
     group_id: str
     sender_jid: str
+    caption_email: Optional[str] = None
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):

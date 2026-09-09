@@ -8,7 +8,10 @@ This directory stores exported n8n workflow JSON files for version control.
 
 ## Current Status
 
-**NOT YET CREATED.** Workflow files will be added in Phase 2.
+Phase 2 Step 1 is exported at
+`workflows/whatsapp-screenshot-processor_v1_20260909.json` with setup notes in
+the adjacent Markdown file. The workflow is intentionally inactive until a
+local authenticated webhook test passes.
 
 ## Workflow Naming Convention
 

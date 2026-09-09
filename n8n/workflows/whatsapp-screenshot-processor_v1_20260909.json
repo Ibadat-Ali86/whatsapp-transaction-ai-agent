@@ -1,0 +1,87 @@
+{
+  "name": "WhatsApp Screenshot Processor v1",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "whatsapp-screenshot",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "f0c8b9d0-5bdf-4e74-b19f-4f75f0b0b001",
+      "name": "WhatsApp Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [240, 300],
+      "webhookId": "whatsapp-screenshot-v1",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CONFIGURE_IN_N8N",
+          "name": "WhatsApp agent webhook auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $json.body ?? $json;\nconst email = typeof body.caption_email === 'string' ? body.caption_email.trim().toLowerCase() : '';\nconst emailPattern = /^[a-zA-Z0-9.!#$%&'*+\\/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/;\nif (!body.processing_id || !body.message_id || body.source !== 'whatsapp') throw new Error('Invalid WhatsApp event identity');\nif (!emailPattern.test(email)) throw new Error('A valid email caption is required');\nif (!body.image || !['image/jpeg', 'image/png', 'image/webp'].includes(body.image.mime_type) || typeof body.image.base64 !== 'string' || body.image.base64.length === 0) throw new Error('A valid image payload is required');\nreturn [{ json: { ...body, caption_email: email } }];"
+      },
+      "id": "f0c8b9d0-5bdf-4e74-b19f-4f75f0b0b002",
+      "name": "Validate Event",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:8000/api/v1/ocr/process",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ processing_id: $json.processing_id, image_base64: $json.image.base64, mime_type: $json.image.mime_type, message_id: $json.message_id, group_id: $json.group_id, sender_jid: $json.sender_jid, caption_email: $json.caption_email }) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "f0c8b9d0-5bdf-4e74-b19f-4f75f0b0b003",
+      "name": "OCR Service",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [720, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "f0c8b9d0-5bdf-4e74-b19f-4f75f0b0b004",
+      "name": "Respond to Baileys",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [960, 300]
+    }
+  ],
+  "connections": {
+    "WhatsApp Webhook": {
+      "main": [[{"node": "Validate Event", "type": "main", "index": 0}]]
+    },
+    "Validate Event": {
+      "main": [[{"node": "OCR Service", "type": "main", "index": 0}]]
+    },
+    "OCR Service": {
+      "main": [[{"node": "Respond to Baileys", "type": "main", "index": 0}]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "none",
+    "saveExecutionProgress": false
+  },
+  "versionId": "whatsapp-screenshot-processor-v1-20260909",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}
