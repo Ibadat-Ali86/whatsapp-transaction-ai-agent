@@ -65,6 +65,35 @@ The endpoint is intentionally disabled by default and has not yet been
 connected to the exported n8n workflow. That connection follows local n8n
 acceptance and Stripe test fixtures.
 
+#### Local verifier test
+
+Use only a Stripe test-mode key and a synthetic/test transaction. Configure
+`STRIPE_ENABLED=true`, `STRIPE_MODE=test`, `STRIPE_SERVICE_TOKEN`, and the
+other `STRIPE_*` variables in the local environment, then start the OCR
+service. Call the internal endpoint with the token header:
+
+```bash
+curl --fail-with-body -X POST http://127.0.0.1:8000/api/v1/verification/stripe \
+  -H "Content-Type: application/json" \
+  -H "X-Internal-Service-Token: ${STRIPE_SERVICE_TOKEN}" \
+  --data '{
+    "processing_id": "wa-test-stripe-001",
+    "email": "testuser@example.com",
+    "amount_cents": 2500,
+    "payment_date": "2026-09-09",
+    "minutes": 31,
+    "payment_hour": 14,
+    "currency": "usd",
+    "payment_method_type": "cashapp"
+  }'
+```
+
+Expected outcomes are `VALID` only for one exact Stripe match;
+`NO_MATCH`/`UNCLEAR` for no match; `AMBIGUOUS`/`UNCLEAR` for collisions; and
+`ERROR` for configuration or Stripe API failures. A missing or incorrect
+internal token must return HTTP 401, and Stripe verification must remain
+disabled outside this controlled test.
+
 ### Step 3 — Failure and recovery acceptance (pending)
 
 - Invalid/missing caption returns a safe validation error.
