@@ -73,8 +73,12 @@ v1 remains the rollback-safe OCR-only workflow.
 - Calls the internal verifier only when the event gate and required OCR
   evidence are present.
 - Rejects caption/OCR email conflicts without calling Stripe.
+- Applies a bounded image-payload check and a 24-hour `source:message_id`
+  duplicate guard before OCR.
 - Stores the internal verifier token only in an n8n credential reference; no
   token or Stripe key is present in the export.
+- Disables n8n success/error execution data retention so raw image base64 is
+  not retained by the workflow.
 - Returns the verifier result alongside OCR data so Baileys can display the
   audit-safe result.
 

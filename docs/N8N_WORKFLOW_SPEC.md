@@ -34,8 +34,10 @@ Phase 2 Step 1 contract:
 - The v2 export may route structured OCR evidence to the internal Stripe
   verifier only when `stripe_verification_enabled` is true and evidence is
   complete. The v1 export remains OCR-only.
-- Message ID plus source is the idempotency key. Duplicate deliveries must
-  return the existing result or be skipped without reprocessing the image.
+- Message ID plus source is the idempotency key. Baileys claims the key before
+  dispatch; v2 also applies a 24-hour active-workflow guard and returns a safe
+  duplicate response without re-running OCR. A shared store is required for
+  clustered n8n deployments.
 
 ## Webhook security
 
@@ -73,6 +75,9 @@ Every workflow export must have:
 - change description.
 
 Do not store secret credential values inside exported workflow files.
+
+Disable successful and failed execution data retention when the workflow
+carries raw image base64.
 
 ## Failure handling
 

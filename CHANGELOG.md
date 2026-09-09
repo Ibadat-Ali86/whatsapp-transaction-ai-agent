@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## 0.3.1 — Workflow safety hardening
+- Added bounded base64 input validation to both versioned n8n workflows.
+- Added v2 workflow-level duplicate protection and safe duplicate responses.
+- Disabled n8n success/error execution-data retention for image payloads.
+
 ## 0.3.0 — Gated Stripe verification workflow
 - Added the optional n8n v2 OCR-to-Stripe test-mode route.
 - Added server-side verification result formatting in WhatsApp replies.

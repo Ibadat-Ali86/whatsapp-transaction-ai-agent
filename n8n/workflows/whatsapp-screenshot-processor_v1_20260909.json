@@ -24,7 +24,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const body = $json.body ?? $json;\nconst email = typeof body.caption_email === 'string' ? body.caption_email.trim().toLowerCase() : '';\nconst emailPattern = /^[a-zA-Z0-9.!#$%&'*+\\/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/;\nif (!body.processing_id || !body.message_id || body.source !== 'whatsapp') throw new Error('Invalid WhatsApp event identity');\nif (!emailPattern.test(email)) throw new Error('A valid email caption is required');\nif (!body.image || !['image/jpeg', 'image/png', 'image/webp'].includes(body.image.mime_type) || typeof body.image.base64 !== 'string' || body.image.base64.length === 0) throw new Error('A valid image payload is required');\nreturn [{ json: { ...body, caption_email: email } }];"
+        "jsCode": "const body = $json.body ?? $json;\nconst email = typeof body.caption_email === 'string' ? body.caption_email.trim().toLowerCase() : '';\nconst emailPattern = /^[a-zA-Z0-9.!#$%&'*+\\/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/;\nconst imageBase64 = typeof body.image?.base64 === 'string' ? body.image.base64 : '';\nconst maxBase64Length = Math.ceil((10 * 1024 * 1024) * 4 / 3) + 4;\nconst base64Pattern = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;\nif (typeof body.processing_id !== 'string' || body.processing_id.length < 1 || body.processing_id.length > 128 || typeof body.message_id !== 'string' || body.message_id.length < 1 || body.message_id.length > 256 || body.source !== 'whatsapp') throw new Error('Invalid WhatsApp event identity');\nif (!emailPattern.test(email)) throw new Error('A valid email caption is required');\nif (!body.image || !['image/jpeg', 'image/png', 'image/webp'].includes(body.image.mime_type) || imageBase64.length === 0 || imageBase64.length > maxBase64Length || !base64Pattern.test(imageBase64)) throw new Error('A valid image payload is required');\nreturn [{ json: { ...body, caption_email: email, image: { ...body.image, base64: imageBase64 } } }];"
       },
       "id": "f0c8b9d0-5bdf-4e74-b19f-4f75f0b0b002",
       "name": "Validate Event",
@@ -76,7 +76,7 @@
   "active": false,
   "settings": {
     "executionOrder": "v1",
-    "saveDataErrorExecution": "all",
+    "saveDataErrorExecution": "none",
     "saveDataSuccessExecution": "none",
     "saveExecutionProgress": false
   },

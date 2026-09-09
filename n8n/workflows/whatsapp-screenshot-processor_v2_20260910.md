@@ -7,11 +7,11 @@
 ## What changed
 
 The v2 workflow keeps the authenticated webhook and OCR path from v1, then
-adds a gated branch:
+adds a bounded validation/idempotency layer and a gated branch:
 
 ```text
-OCR -> evidence gate -> Stripe test verifier -> response
-                         \-> OCR-only response
+validate -> idempotency guard -> OCR -> evidence gate -> Stripe test verifier -> response
+                                      \-> OCR-only response
 ```
 
 The Stripe branch runs only when the Baileys event contains
@@ -34,10 +34,16 @@ non-approving.
    controlled test-mode workflow. Keep it false for OCR-only operation.
 6. If n8n runs in a container, replace both `localhost:8000` URLs with the
    address reachable from that container.
+7. The workflow keeps a 24-hour `source:message_id` guard in active-workflow
+   static data and returns a non-approving duplicate response. Baileys remains
+   the primary idempotency boundary; clustered n8n deployments should replace
+   the static-data guard with a shared store before production use.
 
 ## Safety boundary
 
 n8n never receives the Stripe secret key. It sends structured evidence to the
 local authenticated verifier, which performs read-only, paginated Stripe
-lookups and returns `VALID` only for one exact match. Duplicate detection,
-final verdict policy, Sheets logging, and Telegram alerts remain later gates.
+lookups and returns `VALID` only for one exact match. Final verdict policy,
+Sheets logging, and Telegram alerts remain later gates. Successful and failed
+n8n execution data are disabled in the export so image base64 is not retained
+by the workflow.

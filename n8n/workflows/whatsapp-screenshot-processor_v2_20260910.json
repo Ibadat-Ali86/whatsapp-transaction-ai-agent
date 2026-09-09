@@ -24,13 +24,54 @@
     },
     {
       "parameters": {
-        "jsCode": "const body = $json.body ?? $json;\nconst email = typeof body.caption_email === 'string' ? body.caption_email.trim().toLowerCase() : '';\nconst emailPattern = /^[a-zA-Z0-9.!#$%&'*+\\/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/;\nif (!body.processing_id || !body.message_id || body.source !== 'whatsapp') throw new Error('Invalid WhatsApp event identity');\nif (!emailPattern.test(email)) throw new Error('A valid email caption is required');\nif (!body.image || !['image/jpeg', 'image/png', 'image/webp'].includes(body.image.mime_type) || typeof body.image.base64 !== 'string' || body.image.base64.length === 0) throw new Error('A valid image payload is required');\nreturn [{ json: { ...body, caption_email: email } }];"
+        "jsCode": "const body = $json.body ?? $json;\nconst email = typeof body.caption_email === 'string' ? body.caption_email.trim().toLowerCase() : '';\nconst emailPattern = /^[a-zA-Z0-9.!#$%&'*+\\/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/;\nconst imageBase64 = typeof body.image?.base64 === 'string' ? body.image.base64 : '';\nconst maxBase64Length = Math.ceil((10 * 1024 * 1024) * 4 / 3) + 4;\nconst base64Pattern = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;\nif (typeof body.processing_id !== 'string' || body.processing_id.length < 1 || body.processing_id.length > 128 || typeof body.message_id !== 'string' || body.message_id.length < 1 || body.message_id.length > 256 || body.source !== 'whatsapp') throw new Error('Invalid WhatsApp event identity');\nif (!emailPattern.test(email)) throw new Error('A valid email caption is required');\nif (!body.image || !['image/jpeg', 'image/png', 'image/webp'].includes(body.image.mime_type) || imageBase64.length === 0 || imageBase64.length > maxBase64Length || !base64Pattern.test(imageBase64)) throw new Error('A valid image payload is required');\nreturn [{ json: { ...body, caption_email: email, image: { ...body.image, base64: imageBase64 } } }];"
       },
       "id": "f0c8b9d0-5bdf-4e74-b19f-4f75f0b0b102",
       "name": "Validate Event",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $json;\nconst state = $getWorkflowStaticData('global');\nconst now = Date.now();\nconst ttlMs = 24 * 60 * 60 * 1000;\nconst key = `${body.source}:${body.message_id}`;\nconst processed = state.processed_messages ?? {};\nfor (const [storedKey, seenAt] of Object.entries(processed)) {\n  if (!Number.isInteger(seenAt) || now - seenAt > ttlMs) delete processed[storedKey];\n}\nconst duplicate = Object.prototype.hasOwnProperty.call(processed, key);\nif (!duplicate) processed[key] = now;\nstate.processed_messages = processed;\nreturn [{ json: { ...body, idempotency: { key, duplicate } } }];"
+      },
+      "id": "f0c8b9d0-5bdf-4e74-b19f-4f75f0b0b112",
+      "name": "Idempotency Guard",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [720, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "duplicate-message-condition-v2",
+              "leftValue": "={{ $json.idempotency.duplicate }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "f0c8b9d0-5bdf-4e74-b19f-4f75f0b0b113",
+      "name": "Duplicate Message?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [960, 300]
     },
     {
       "parameters": {
@@ -47,7 +88,7 @@
       "name": "OCR Service",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [720, 300]
+      "position": [1200, 300]
     },
     {
       "parameters": {
@@ -158,6 +199,18 @@
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
       "position": [1680, 420]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'DUPLICATE', verdict: 'UNCLEAR', reason_code: 'DUPLICATE_MESSAGE', processing_id: $json.processing_id }) }}",
+        "options": {}
+      },
+      "id": "f0c8b9d0-5bdf-4e74-b19f-4f75f0b0b114",
+      "name": "Respond Duplicate",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1200, 540]
     }
   ],
   "connections": {
@@ -165,7 +218,16 @@
       "main": [[{"node": "Validate Event", "type": "main", "index": 0}]]
     },
     "Validate Event": {
-      "main": [[{"node": "OCR Service", "type": "main", "index": 0}]]
+      "main": [[{"node": "Idempotency Guard", "type": "main", "index": 0}]]
+    },
+    "Idempotency Guard": {
+      "main": [[{"node": "Duplicate Message?", "type": "main", "index": 0}]]
+    },
+    "Duplicate Message?": {
+      "main": [
+        [{"node": "Respond Duplicate", "type": "main", "index": 0}],
+        [{"node": "OCR Service", "type": "main", "index": 0}]
+      ]
     },
     "OCR Service": {
       "main": [[{"node": "Prepare Stripe Evidence", "type": "main", "index": 0}]]
@@ -192,7 +254,7 @@
   "active": false,
   "settings": {
     "executionOrder": "v1",
-    "saveDataErrorExecution": "all",
+    "saveDataErrorExecution": "none",
     "saveDataSuccessExecution": "none",
     "saveExecutionProgress": false
   },

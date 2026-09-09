@@ -49,6 +49,7 @@ pending because n8n is not installed on this machine.
 - [x] email-caption validation implemented
 - [x] message ID idempotency implemented
 - [x] optional OCR-to-Stripe v2 workflow exported
+- [x] workflow payload bounds, duplicate guard, and execution-retention hardening added
 - [ ] webhook tested
 - [ ] authenticated webhook tested
 - [ ] Baileys -> n8n -> Baileys tested

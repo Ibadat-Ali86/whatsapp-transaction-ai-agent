@@ -41,6 +41,8 @@ Per `docs/N8N_WORKFLOW_SPEC.md`:
 - **NEVER** store credential values inside exported workflow JSON.
 - Webhook authentication must be configured; an unauthenticated production webhook carrying payment data is forbidden.
 - Do not expose port 5678 to the public internet during local development.
+- Disable successful and failed execution data retention when a workflow
+  carries raw image base64.
 
 ## Idempotency Requirement
 
