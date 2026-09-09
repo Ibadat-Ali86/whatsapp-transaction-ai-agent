@@ -89,6 +89,7 @@ Incoming image event:
   "received_at": "...",
   "is_forwarded": false,
   "caption_email": "customer@example.com",
+  "stripe_verification_enabled": false,
   "image": {
     "mime_type": "image/jpeg",
     "base64": "..."

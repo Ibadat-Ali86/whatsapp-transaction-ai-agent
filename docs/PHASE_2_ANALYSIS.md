@@ -16,6 +16,7 @@ WhatsApp image + email caption
   -> authenticated n8n webhook
   -> event validation and idempotency
   -> OCR service
+  -> optional Stripe test verifier
   -> n8n response
   -> Baileys reply
 ```
@@ -62,8 +63,20 @@ WhatsApp image + email caption
 - Emits a safe audit event with a one-way email hash and no authorization data.
 
 The endpoint is intentionally disabled by default and has not yet been
-connected to the exported n8n workflow. That connection follows local n8n
-acceptance and Stripe test fixtures.
+enabled by default. The v2 n8n export now contains the optional connection;
+v1 remains the rollback-safe OCR-only workflow.
+
+### Step 2b — n8n OCR-to-Stripe route (implemented, runtime pending)
+
+- Added `whatsapp-screenshot-processor_v2_20260910.json`.
+- Preserves OCR-only behavior when `STRIPE_VERIFICATION_ENABLED=false`.
+- Calls the internal verifier only when the event gate and required OCR
+  evidence are present.
+- Rejects caption/OCR email conflicts without calling Stripe.
+- Stores the internal verifier token only in an n8n credential reference; no
+  token or Stripe key is present in the export.
+- Returns the verifier result alongside OCR data so Baileys can display the
+  audit-safe result.
 
 #### Local verifier test
 
@@ -101,6 +114,7 @@ disabled outside this controlled test.
 - Duplicate message IDs do not re-run OCR.
 - OCR timeout/5xx produces a safe retryable workflow error.
 - n8n unavailable produces a safe WhatsApp error without leaking internals.
+- Stripe verifier unavailable produces a controlled non-approving error.
 
 ## Unknowns requiring live validation
 
@@ -108,5 +122,7 @@ disabled outside this controlled test.
   development machine.
 - Container networking may require replacing `localhost` in the OCR node.
 - The final retention policy for failed n8n executions needs client approval.
+- The exact n8n node import behavior must be verified against the installed
+  n8n version before activating v2.
 - Stripe matching is implemented as a gated test-mode service boundary; live
   Stripe fixtures and formal Phase 4 acceptance are still pending.

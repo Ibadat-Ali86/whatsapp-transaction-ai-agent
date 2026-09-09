@@ -1,0 +1,43 @@
+# WhatsApp Screenshot Processor v2
+
+- Version: 2
+- Date: 2026-09-10
+- Change: Optional server-side Stripe test verification after OCR
+
+## What changed
+
+The v2 workflow keeps the authenticated webhook and OCR path from v1, then
+adds a gated branch:
+
+```text
+OCR -> evidence gate -> Stripe test verifier -> response
+                         \-> OCR-only response
+```
+
+The Stripe branch runs only when the Baileys event contains
+`stripe_verification_enabled=true` and OCR provides an amount, ISO date, and
+minute. If OCR email conflicts with the required caption email, the workflow
+returns `UNCLEAR` without calling Stripe. Missing evidence also remains
+non-approving.
+
+## Configure safely
+
+1. Import v2 only after v1 local OCR acceptance, and keep it inactive during
+   import.
+2. Keep the existing webhook header credential.
+3. Create the `OCR service Stripe verifier auth` header credential with header
+   name `X-Internal-Service-Token` and the same value as the Python service's
+   `STRIPE_SERVICE_TOKEN`. The value is intentionally absent from this export.
+4. Configure the OCR service with `STRIPE_ENABLED=true`, `STRIPE_MODE=test`, a
+   `sk_test_` key, and the configured timezone.
+5. Set `STRIPE_VERIFICATION_ENABLED=true` in the Baileys process only for the
+   controlled test-mode workflow. Keep it false for OCR-only operation.
+6. If n8n runs in a container, replace both `localhost:8000` URLs with the
+   address reachable from that container.
+
+## Safety boundary
+
+n8n never receives the Stripe secret key. It sends structured evidence to the
+local authenticated verifier, which performs read-only, paginated Stripe
+lookups and returns `VALID` only for one exact match. Duplicate detection,
+final verdict policy, Sheets logging, and Telegram alerts remain later gates.

@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## 0.3.0 — Gated Stripe verification workflow
+- Added the optional n8n v2 OCR-to-Stripe test-mode route.
+- Added server-side verification result formatting in WhatsApp replies.
+- Added workflow structure and secret-boundary regression tests.
+
 ## 0.2.0 — Phase 1 completion and Phase 2 Step 1
 - Improved OCR candidate selection for compact phone screenshots.
 - Added email-caption validation and safe WhatsApp rejection messaging.

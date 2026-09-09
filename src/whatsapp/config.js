@@ -20,6 +20,7 @@ const config = {
   N8N_WEBHOOK_TOKEN: process.env.N8N_WEBHOOK_TOKEN || '',
   N8N_TIMEOUT_MS: parseInteger(process.env.N8N_TIMEOUT_MS, 60000),
   N8N_RETRY_ATTEMPTS: parseInteger(process.env.N8N_RETRY_ATTEMPTS, 2),
+  STRIPE_VERIFICATION_ENABLED: process.env.STRIPE_VERIFICATION_ENABLED === 'true',
   REQUIRE_EMAIL_CAPTION: process.env.REQUIRE_EMAIL_CAPTION !== 'false',
   ALLOWED_GROUP_JIDS: allowedGroupJids,
   WHATSAPP_TEST_GROUP_JID: process.env.WHATSAPP_TEST_GROUP_JID || '',

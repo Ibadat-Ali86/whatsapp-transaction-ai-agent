@@ -18,6 +18,7 @@ function formatOcrReply(ocrResult, processingId) {
   const status = fields.status || 'Not found';
   const confidence = ocrResult?.confidence != null ? Math.round(ocrResult.confidence * 100) : 0;
   const provider = ocrResult?.provider || 'tesseract';
+  const verification = ocrResult?.verification;
 
   let reply = `🔍 *Payment Screenshot Analysis*\n`;
   reply += `📋 Processing ID: ${processingId}\n\n`;
@@ -29,6 +30,19 @@ function formatOcrReply(ocrResult, processingId) {
   reply += `✅ Status: ${status}\n\n`;
   reply += `📊 Confidence: ${confidence}%\n`;
   reply += `🔬 OCR Provider: ${provider}\n\n`;
+
+  if (verification) {
+    const verdict = verification.verdict || 'UNCLEAR';
+    const marker = verdict === 'VALID' ? '✅' : verdict === 'ERROR' ? '❌' : '⚠️';
+    reply += `${marker} Stripe Verification: ${verdict}\n`;
+    if (verification.reason_code) {
+      reply += `🧾 Verification Reason: ${verification.reason_code}\n`;
+    }
+    if (verification.stripe_charge_id) {
+      reply += `🔗 Stripe Charge: ${verification.stripe_charge_id}\n`;
+    }
+    reply += `\n`;
+  }
 
   if (confidence < 50) {
     reply += `⚠️ Low confidence — manual review recommended\n\n`;

@@ -116,6 +116,7 @@ test('routes a captioned image through n8n when enabled', async () => {
     BOT_REPLY_ENABLED: true,
     REQUIRE_EMAIL_CAPTION: true,
     N8N_ENABLED: true,
+    STRIPE_VERIFICATION_ENABLED: true,
   }, logger, {
     downloadImage: async () => ({ imageBytes: Buffer.from('synthetic-image'), mimeType: 'image/png', tempPath: null }),
     processImageViaN8n: async payload => {
@@ -128,5 +129,6 @@ test('routes a captioned image through n8n when enabled', async () => {
 
   assert.equal(workflowPayload.source, 'whatsapp');
   assert.equal(workflowPayload.caption_email, 'customer@example.com');
+  assert.equal(workflowPayload.stripe_verification_enabled, true);
   assert.equal(workflowPayload.image.mime_type, 'image/png');
 });

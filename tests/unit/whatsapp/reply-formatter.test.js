@@ -23,3 +23,20 @@ test('formats the OCR service fields response shape', () => {
   assert.match(reply, /Name: Adam Craft/);
   assert.match(reply, /Status: Completed/);
 });
+
+test('formats the server-side Stripe verification result', () => {
+  const reply = formatOcrReply({
+    provider: 'tesseract',
+    confidence: 1,
+    fields: { email: 'customer@example.com', amount_cents: 2000 },
+    verification: {
+      verdict: 'VALID',
+      reason_code: 'EXACT_SINGLE_MATCH',
+      stripe_charge_id: 'ch_test_123',
+    },
+  }, 'wa-stripe-test');
+
+  assert.match(reply, /Stripe Verification: VALID/);
+  assert.match(reply, /Verification Reason: EXACT_SINGLE_MATCH/);
+  assert.match(reply, /Stripe Charge: ch_test_123/);
+});

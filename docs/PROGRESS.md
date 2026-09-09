@@ -48,6 +48,7 @@ pending because n8n is not installed on this machine.
 - [x] authenticated webhook client implemented
 - [x] email-caption validation implemented
 - [x] message ID idempotency implemented
+- [x] optional OCR-to-Stripe v2 workflow exported
 - [ ] webhook tested
 - [ ] authenticated webhook tested
 - [ ] Baileys -> n8n -> Baileys tested

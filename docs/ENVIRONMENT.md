@@ -19,6 +19,10 @@ N8N_WEBHOOK_PATH=/webhook/whatsapp-screenshot
 
 LOG_LEVEL=INFO
 
+`STRIPE_VERIFICATION_ENABLED=true` is required in the Baileys process only
+when the v2 n8n workflow is being tested with Stripe test data. It defaults to
+false and does not expose the Stripe secret.
+
 ## WhatsApp group access
 
 WHATSAPP_ALLOWED_GROUP_JIDS=1234567890-1234567890@g.us,1234567890-9876543210@g.us

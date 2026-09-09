@@ -85,6 +85,7 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
             received_at: new Date().toISOString(),
             is_forwarded: Boolean(msg.message?.imageMessage?.contextInfo?.isForwarded),
             caption_email: captionEmail,
+            stripe_verification_enabled: config.STRIPE_VERIFICATION_ENABLED === true,
             image: {
               mime_type: downloadedMime,
               base64: imageBase64,

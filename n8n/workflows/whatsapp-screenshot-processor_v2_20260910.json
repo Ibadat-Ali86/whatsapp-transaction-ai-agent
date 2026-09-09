@@ -1,0 +1,203 @@
+{
+  "name": "WhatsApp Screenshot Processor v2 - OCR and Stripe Test Verification",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "whatsapp-screenshot",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "f0c8b9d0-5bdf-4e74-b19f-4f75f0b0b101",
+      "name": "WhatsApp Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [240, 300],
+      "webhookId": "whatsapp-screenshot-v2",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CONFIGURE_IN_N8N",
+          "name": "WhatsApp agent webhook auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $json.body ?? $json;\nconst email = typeof body.caption_email === 'string' ? body.caption_email.trim().toLowerCase() : '';\nconst emailPattern = /^[a-zA-Z0-9.!#$%&'*+\\/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/;\nif (!body.processing_id || !body.message_id || body.source !== 'whatsapp') throw new Error('Invalid WhatsApp event identity');\nif (!emailPattern.test(email)) throw new Error('A valid email caption is required');\nif (!body.image || !['image/jpeg', 'image/png', 'image/webp'].includes(body.image.mime_type) || typeof body.image.base64 !== 'string' || body.image.base64.length === 0) throw new Error('A valid image payload is required');\nreturn [{ json: { ...body, caption_email: email } }];"
+      },
+      "id": "f0c8b9d0-5bdf-4e74-b19f-4f75f0b0b102",
+      "name": "Validate Event",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:8000/api/v1/ocr/process",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ processing_id: $json.processing_id, image_base64: $json.image.base64, mime_type: $json.image.mime_type, message_id: $json.message_id, group_id: $json.group_id, sender_jid: $json.sender_jid, caption_email: $json.caption_email }) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "f0c8b9d0-5bdf-4e74-b19f-4f75f0b0b103",
+      "name": "OCR Service",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [720, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const original = $('Validate Event').first().json;\nconst ocrResult = $json;\nconst fields = ocrResult.fields ?? {};\nconst ocrEmail = typeof fields.email === 'string' ? fields.email.trim().toLowerCase() : '';\nconst minutes = fields.minutes == null ? null : Number.parseInt(String(fields.minutes), 10);\nconst paymentHour = fields.payment_hour == null ? null : Number.parseInt(String(fields.payment_hour), 10);\nconst dateValid = typeof fields.payment_date === 'string' && /^\\d{4}-\\d{2}-\\d{2}$/.test(fields.payment_date);\nconst emailConflict = Boolean(ocrEmail) && ocrEmail !== original.caption_email;\nconst evidenceReady = Number.isInteger(fields.amount_cents) && dateValid && Number.isInteger(minutes) && minutes >= 0 && minutes <= 59 && !emailConflict;\nlet verification = null;\nif (original.stripe_verification_enabled !== true) verification = { status: 'SKIPPED', verdict: 'UNCLEAR', reason_code: 'STRIPE_DISABLED' };\nelse if (emailConflict) verification = { status: 'NO_MATCH', verdict: 'UNCLEAR', reason_code: 'CAPTION_OCR_EMAIL_CONFLICT' };\nelse if (!evidenceReady) verification = { status: 'NO_MATCH', verdict: 'UNCLEAR', reason_code: 'INSUFFICIENT_OCR_EVIDENCE' };\nreturn [{ json: { processing_id: original.processing_id, ready_for_stripe: original.stripe_verification_enabled === true && evidenceReady, ocr_result: ocrResult, verification, stripe_request: { processing_id: original.processing_id, email: original.caption_email, amount_cents: fields.amount_cents, payment_date: fields.payment_date, minutes, payment_hour: Number.isInteger(paymentHour) ? paymentHour : null, currency: 'usd', payment_method_type: 'cashapp' } } }];"
+      },
+      "id": "f0c8b9d0-5bdf-4e74-b19f-4f75f0b0b104",
+      "name": "Prepare Stripe Evidence",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [960, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "stripe-ready-condition-v2",
+              "leftValue": "={{ $json.ready_for_stripe }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "f0c8b9d0-5bdf-4e74-b19f-4f75f0b0b105",
+      "name": "Stripe Gate Enabled",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1200, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:8000/api/v1/verification/stripe",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.stripe_request) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "f0c8b9d0-5bdf-4e74-b19f-4f75f0b0b106",
+      "name": "Stripe Test Verifier",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1440, 180],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CONFIGURE_IN_N8N",
+          "name": "OCR service Stripe verifier auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const prepared = $('Prepare Stripe Evidence').first().json;\nreturn [{ json: { ...prepared.ocr_result, verification: $json } }];"
+      },
+      "id": "f0c8b9d0-5bdf-4e74-b19f-4f75f0b0b107",
+      "name": "Format Verified Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1680, 180]
+    },
+    {
+      "parameters": {
+        "jsCode": "const prepared = $json;\nreturn [{ json: { ...prepared.ocr_result, verification: prepared.verification } }];"
+      },
+      "id": "f0c8b9d0-5bdf-4e74-b19f-4f75f0b0b108",
+      "name": "Format OCR Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1440, 420]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "f0c8b9d0-5bdf-4e74-b19f-4f75f0b0b109",
+      "name": "Respond Verified Result",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1920, 180]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "f0c8b9d0-5bdf-4e74-b19f-4f75f0b0b110",
+      "name": "Respond OCR Result",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1680, 420]
+    }
+  ],
+  "connections": {
+    "WhatsApp Webhook": {
+      "main": [[{"node": "Validate Event", "type": "main", "index": 0}]]
+    },
+    "Validate Event": {
+      "main": [[{"node": "OCR Service", "type": "main", "index": 0}]]
+    },
+    "OCR Service": {
+      "main": [[{"node": "Prepare Stripe Evidence", "type": "main", "index": 0}]]
+    },
+    "Prepare Stripe Evidence": {
+      "main": [[{"node": "Stripe Gate Enabled", "type": "main", "index": 0}]]
+    },
+    "Stripe Gate Enabled": {
+      "main": [
+        [{"node": "Stripe Test Verifier", "type": "main", "index": 0}],
+        [{"node": "Format OCR Result", "type": "main", "index": 0}]
+      ]
+    },
+    "Stripe Test Verifier": {
+      "main": [[{"node": "Format Verified Result", "type": "main", "index": 0}]]
+    },
+    "Format Verified Result": {
+      "main": [[{"node": "Respond Verified Result", "type": "main", "index": 0}]]
+    },
+    "Format OCR Result": {
+      "main": [[{"node": "Respond OCR Result", "type": "main", "index": 0}]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "none",
+    "saveExecutionProgress": false
+  },
+  "versionId": "whatsapp-screenshot-processor-v2-20260910",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

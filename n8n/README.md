@@ -13,6 +13,11 @@ Phase 2 Step 1 is exported at
 the adjacent Markdown file. The workflow is intentionally inactive until a
 local authenticated webhook test passes.
 
+The gated Stripe test-mode route is exported at
+`workflows/whatsapp-screenshot-processor_v2_20260910.json`. Keep v1 as the
+rollback-safe OCR-only workflow until v2's n8n, verifier, and Stripe test
+fixtures pass together.
+
 ## Workflow Naming Convention
 
 ```
