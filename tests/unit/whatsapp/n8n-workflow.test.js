@@ -38,6 +38,8 @@ test('n8n v2 workflow contains a gated Stripe branch without secret values', () 
   assert.ok(nodeNames.includes('Duplicate Message?'));
   assert.ok(nodeNames.includes('Respond Duplicate'));
   assert.ok(nodeNames.includes('Respond OCR Result'));
+  assert.ok(nodeNames.includes('Valid Event?'));
+  assert.ok(nodeNames.includes('Respond Invalid Event'));
   const stripeNode = workflow.nodes.find(node => node.name === 'Stripe Test Verifier');
   assert.equal(stripeNode.credentials.httpHeaderAuth.name, 'OCR service Stripe verifier auth');
   assert.equal(stripeNode.credentials.httpHeaderAuth.id, 'CONFIGURE_STRIPE_IN_N8N');
@@ -81,14 +83,20 @@ test('n8n v2 code nodes enforce caption, payload, idempotency, and Stripe gates'
   const validated = executeCodeNode(validate, baseEvent)[0].json;
   assert.equal(validated.caption_email, 'customer@example.com');
   assert.equal(validated.image.base64, 'aGVsbG8=');
-  assert.throws(() => executeCodeNode(validate, {
+  const invalidCaption = executeCodeNode(validate, {
     ...baseEvent,
     caption_email: 'not-an-email',
-  }), /valid email caption/);
-  assert.throws(() => executeCodeNode(validate, {
+  })[0].json;
+  assert.equal(invalidCaption.valid, false);
+  assert.equal(invalidCaption.validation_error.reason_code, 'INVALID_CAPTION_EMAIL');
+  assert.equal(invalidCaption.image, undefined);
+  const invalidImage = executeCodeNode(validate, {
     ...baseEvent,
     image: { mime_type: 'image/png', base64: 'A'.repeat(14_000_000) },
-  }), /valid image payload/);
+  })[0].json;
+  assert.equal(invalidImage.valid, false);
+  assert.equal(invalidImage.validation_error.reason_code, 'INVALID_IMAGE_PAYLOAD');
+  assert.equal(invalidImage.image, undefined);
 
   const state = {};
   const first = executeCodeNode(idempotency, validated, { state })[0].json;

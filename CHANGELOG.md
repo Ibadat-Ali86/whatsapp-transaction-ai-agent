@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## 0.3.2 — n8n runtime acceptance hardening
+- Added structured HTTP 400 responses for invalid v2 webhook events.
+- Verified the v2 export imports with distinct webhook and Stripe credentials.
+- Verified authenticated OCR, duplicate suppression, and caption/OCR conflict
+  behavior in an isolated n8n 1.100.1 runtime.
+
 ## 0.3.1 — Workflow safety hardening
 - Added bounded base64 input validation to both versioned n8n workflows.
 - Added v2 workflow-level duplicate protection and safe duplicate responses.

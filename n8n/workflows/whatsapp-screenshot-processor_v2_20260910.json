@@ -24,13 +24,44 @@
     },
     {
       "parameters": {
-        "jsCode": "const body = $json.body ?? $json;\nconst email = typeof body.caption_email === 'string' ? body.caption_email.trim().toLowerCase() : '';\nconst emailPattern = /^[a-zA-Z0-9.!#$%&'*+\\/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/;\nconst imageBase64 = typeof body.image?.base64 === 'string' ? body.image.base64 : '';\nconst maxBase64Length = Math.ceil((10 * 1024 * 1024) * 4 / 3) + 4;\nconst base64Pattern = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;\nif (typeof body.processing_id !== 'string' || body.processing_id.length < 1 || body.processing_id.length > 128 || typeof body.message_id !== 'string' || body.message_id.length < 1 || body.message_id.length > 256 || body.source !== 'whatsapp') throw new Error('Invalid WhatsApp event identity');\nif (!emailPattern.test(email)) throw new Error('A valid email caption is required');\nif (!body.image || !['image/jpeg', 'image/png', 'image/webp'].includes(body.image.mime_type) || imageBase64.length === 0 || imageBase64.length > maxBase64Length || !base64Pattern.test(imageBase64)) throw new Error('A valid image payload is required');\nreturn [{ json: { ...body, caption_email: email, image: { ...body.image, base64: imageBase64 } } }];"
+        "jsCode": "const body = $json.body ?? $json;\nconst email = typeof body.caption_email === 'string' ? body.caption_email.trim().toLowerCase() : '';\nconst emailPattern = /^[a-zA-Z0-9.!#$%&'*+\\/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/;\nconst imageBase64 = typeof body.image?.base64 === 'string' ? body.image.base64 : '';\nconst maxBase64Length = Math.ceil((10 * 1024 * 1024) * 4 / 3) + 4;\nconst base64Pattern = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;\nconst processingId = typeof body.processing_id === 'string' && body.processing_id.length <= 128 ? body.processing_id : null;\nconst invalid = reasonCode => [{ json: { valid: false, processing_id: processingId, validation_error: { status: 'REJECTED', verdict: 'UNCLEAR', reason_code: reasonCode } } }];\nif (typeof body.processing_id !== 'string' || body.processing_id.length < 1 || body.processing_id.length > 128 || typeof body.message_id !== 'string' || body.message_id.length < 1 || body.message_id.length > 256 || body.source !== 'whatsapp') return invalid('INVALID_EVENT_IDENTITY');\nif (!emailPattern.test(email)) return invalid('INVALID_CAPTION_EMAIL');\nif (!body.image || !['image/jpeg', 'image/png', 'image/webp'].includes(body.image.mime_type) || imageBase64.length === 0 || imageBase64.length > maxBase64Length || !base64Pattern.test(imageBase64)) return invalid('INVALID_IMAGE_PAYLOAD');\nreturn [{ json: { ...body, valid: true, caption_email: email, image: { ...body.image, base64: imageBase64 } } }];"
       },
       "id": "f0c8b9d0-5bdf-4e74-b19f-4f75f0b0b102",
       "name": "Validate Event",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "valid-event-condition-v2",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "f0c8b9d0-5bdf-4e74-b19f-4f75f0b0b115",
+      "name": "Valid Event?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [720, 300]
     },
     {
       "parameters": {
@@ -211,6 +242,20 @@
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
       "position": [1200, 540]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'REJECTED', verdict: 'UNCLEAR', reason_code: $json.validation_error.reason_code, processing_id: $json.processing_id }) }}",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "id": "f0c8b9d0-5bdf-4e74-b19f-4f75f0b0b116",
+      "name": "Respond Invalid Event",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [960, 540]
     }
   ],
   "connections": {
@@ -218,7 +263,13 @@
       "main": [[{"node": "Validate Event", "type": "main", "index": 0}]]
     },
     "Validate Event": {
-      "main": [[{"node": "Idempotency Guard", "type": "main", "index": 0}]]
+      "main": [[{"node": "Valid Event?", "type": "main", "index": 0}]]
+    },
+    "Valid Event?": {
+      "main": [
+        [{"node": "Idempotency Guard", "type": "main", "index": 0}],
+        [{"node": "Respond Invalid Event", "type": "main", "index": 0}]
+      ]
     },
     "Idempotency Guard": {
       "main": [[{"node": "Duplicate Message?", "type": "main", "index": 0}]]

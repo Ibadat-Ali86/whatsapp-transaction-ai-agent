@@ -20,6 +20,9 @@ minute. If OCR email conflicts with the required caption email, the workflow
 returns `UNCLEAR` without calling Stripe. Missing evidence also remains
 non-approving.
 
+Malformed identity, caption, or image input is rejected with a structured HTTP
+`400` response before idempotency or OCR processing.
+
 ## Configure safely
 
 1. Import v2 only after v1 local OCR acceptance, and keep it inactive during
@@ -38,6 +41,14 @@ non-approving.
    static data and returns a non-approving duplicate response. Baileys remains
    the primary idempotency boundary; clustered n8n deployments should replace
    the static-data guard with a shared store before production use.
+
+## Local acceptance evidence
+
+The committed export was imported and activated in an isolated n8n `1.100.1`
+runtime with a fresh SQLite database. A synthetic receipt fixture produced an
+OCR response with `STRIPE_DISABLED`, a repeated message ID produced a safe
+`DUPLICATE` response, an invalid token returned `403`, and an invalid caption
+returned `400` with `INVALID_CAPTION_EMAIL`.
 
 ## Safety boundary
 

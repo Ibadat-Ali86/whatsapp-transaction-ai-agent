@@ -44,12 +44,19 @@ WhatsApp image + email caption
 - Added message idempotency protection in the Baileys handler.
 - Kept the direct OCR path as the default so Phase 1 remains locally testable.
 
-### Step 2 — Local runtime acceptance (pending)
+### Step 2 — Local runtime acceptance (implemented)
 
-- Install or start local n8n.
-- Import the workflow and configure its header credential.
-- Run an authenticated webhook test with a synthetic fixture.
-- Enable `N8N_ENABLED=true` and run Baileys -> n8n -> OCR -> Baileys.
+- Validated the export with an isolated n8n `1.100.1` runtime and a fresh
+  SQLite database.
+- Imported separate webhook and verifier header credentials without exporting
+  their values, then activated v2.
+- Ran authenticated webhook tests with a synthetic OCR fixture.
+- Confirmed invalid tokens return `403`, invalid captions return structured
+  `400` rejection responses, valid OCR-only requests return a non-approving
+  `STRIPE_DISABLED` result, and repeated message IDs return `DUPLICATE`
+  without re-running OCR.
+- The live `N8N_ENABLED=true` Baileys -> n8n -> OCR -> Baileys path remains a
+  user-controlled WhatsApp acceptance step.
 
 ### Step 2a — Server-side Stripe test verifier (implemented, gated)
 
@@ -66,7 +73,7 @@ The endpoint is intentionally disabled by default and has not yet been
 enabled by default. The v2 n8n export now contains the optional connection;
 v1 remains the rollback-safe OCR-only workflow.
 
-### Step 2b — n8n OCR-to-Stripe route (implemented, runtime pending)
+### Step 2b — n8n OCR-to-Stripe route (implemented, gated)
 
 - Added `whatsapp-screenshot-processor_v2_20260910.json`.
 - Preserves OCR-only behavior when `STRIPE_VERIFICATION_ENABLED=false`.
@@ -81,6 +88,8 @@ v1 remains the rollback-safe OCR-only workflow.
   not retained by the workflow.
 - Returns the verifier result alongside OCR data so Baileys can display the
   audit-safe result.
+- The OCR-to-Stripe conflict branch was exercised locally and returned
+  `CAPTION_OCR_EMAIL_CONFLICT` without calling Stripe.
 
 #### Local verifier test
 
@@ -111,22 +120,24 @@ Expected outcomes are `VALID` only for one exact Stripe match;
 internal token must return HTTP 401, and Stripe verification must remain
 disabled outside this controlled test.
 
-### Step 3 — Failure and recovery acceptance (pending)
+### Step 3 — Failure and recovery acceptance (partially implemented)
 
-- Invalid/missing caption returns a safe validation error.
+- Invalid/missing caption returns a structured `400` validation error.
 - Invalid token is rejected before OCR.
 - Duplicate message IDs do not re-run OCR.
-- OCR timeout/5xx produces a safe retryable workflow error.
-- n8n unavailable produces a safe WhatsApp error without leaking internals.
-- Stripe verifier unavailable produces a controlled non-approving error.
+- Caption/OCR email conflict is non-approving and does not call Stripe.
+- OCR timeout/5xx produces a safe retryable workflow error (pending live
+  failure injection).
+- n8n unavailable produces a safe WhatsApp error without leaking internals
+  (pending live Baileys acceptance).
+- Stripe verifier unavailable produces a controlled non-approving error
+  (pending live gated-branch acceptance).
 
 ## Unknowns requiring live validation
 
-- The installed n8n version and exact import behavior are not available on this
-  development machine.
 - Container networking may require replacing `localhost` in the OCR node.
 - The final retention policy for failed n8n executions needs client approval.
-- The exact n8n node import behavior must be verified against the installed
-  n8n version before activating v2.
+- The export was verified against n8n `1.100.1`; other n8n versions should be
+  re-imported and smoke-tested before activation.
 - Stripe matching is implemented as a gated test-mode service boundary; live
   Stripe fixtures and formal Phase 4 acceptance are still pending.
