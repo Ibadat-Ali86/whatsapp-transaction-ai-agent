@@ -93,7 +93,14 @@ async def process_ocr(request: OCRRequest):
     
     if result.error:
         # Do not leak internal error info
-        return JSONResponse(status_code=500, content={"error": "Processing failed", "verdict": "UNCLEAR"})
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "Processing failed",
+                "verdict": "UNCLEAR",
+                "reason_code": result.error_code or "OCR_PROCESSING_ERROR",
+            },
+        )
         
     # Serialize ExtractedFields
     fields_dict = None
@@ -118,6 +125,8 @@ async def process_ocr(request: OCRRequest):
         "ai_used": result.ai_used,
         "processing_time_ms": result.processing_time_ms
     }
+    if result.fallback_reason:
+        response_data["fallback_reason"] = result.fallback_reason
     
     return JSONResponse(content=response_data)
 

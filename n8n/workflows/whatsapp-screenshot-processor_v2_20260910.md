@@ -20,6 +20,10 @@ minute. If OCR email conflicts with the required caption email, the workflow
 returns `UNCLEAR` without calling Stripe. Missing evidence also remains
 non-approving.
 
+The Stripe branch also requires OCR confidence of at least `0.85`. A local
+Tesseract result returned after an AI-provider outage remains non-approving
+until that confidence gate is satisfied.
+
 Malformed identity, caption, or image input is rejected with a structured HTTP
 `400` response before idempotency or OCR processing.
 

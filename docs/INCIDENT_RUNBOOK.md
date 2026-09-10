@@ -18,10 +18,16 @@
 
 ## If Groq fails
 Configured behavior:
-- do not silently guess;
-- mark processing as UNCLEAR or provider error;
+- preserve the local Tesseract extraction when available;
+- expose a safe `AI_PROVIDER_UNAVAILABLE` fallback reason;
+- keep the confidence score and do not approve low-confidence evidence;
 - log safe error;
-- optionally retry according to policy.
+- optionally retry according to policy after the local fallback.
+
+If Tesseract itself fails, the OCR API returns a safe reason code such as
+`TESSERACT_NOT_FOUND`, `TESSERACT_PROCESSING_FAILED`, or
+`NO_TEXT_EXTRACTED`. Inspect the OCR service log for the matching processing
+ID; never request or share API keys, WhatsApp auth state, or raw image data.
 
 ## If Stripe fails
 Do not mark VALID.

@@ -1,5 +1,12 @@
 # CHANGELOG
 
+## 0.3.4 — OCR provider resilience
+- Preserve Tesseract results when the optional Groq/Gemini fallback is
+  unavailable or rate-limited.
+- Added safe OCR reason codes for genuine Tesseract failures.
+- Prevented low-confidence OCR fallback results from entering the n8n Stripe
+  verification branch.
+
 ## 0.3.3 — Stripe verifier runtime acceptance
 - Exercised the real FastAPI Stripe verification endpoint against a disposable
   read-only Stripe-compatible fixture.

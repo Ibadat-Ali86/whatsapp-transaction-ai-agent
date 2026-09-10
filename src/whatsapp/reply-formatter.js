@@ -31,6 +31,10 @@ function formatOcrReply(ocrResult, processingId) {
   reply += `📊 Confidence: ${confidence}%\n`;
   reply += `🔬 OCR Provider: ${provider}\n\n`;
 
+  if (ocrResult?.fallback_reason === 'AI_PROVIDER_UNAVAILABLE') {
+    reply += `⚠️ AI enhancement unavailable — result is from local OCR. Manual review recommended.\n\n`;
+  }
+
   if (verification) {
     const verdict = verification.verdict || 'UNCLEAR';
     const marker = verdict === 'VALID' ? '✅' : verdict === 'ERROR' ? '❌' : '⚠️';

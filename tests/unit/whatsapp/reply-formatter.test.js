@@ -40,3 +40,16 @@ test('formats the server-side Stripe verification result', () => {
   assert.match(reply, /Verification Reason: EXACT_SINGLE_MATCH/);
   assert.match(reply, /Stripe Charge: ch_test_123/);
 });
+
+test('makes local OCR fallback visible without exposing provider details', () => {
+  const reply = formatOcrReply({
+    provider: 'tesseract',
+    confidence: 0.42,
+    fallback_reason: 'AI_PROVIDER_UNAVAILABLE',
+    fields: { email: 'customer@example.com', amount_cents: 2000 },
+  }, 'wa-fallback-test');
+
+  assert.match(reply, /AI enhancement unavailable/);
+  assert.match(reply, /local OCR/);
+  assert.doesNotMatch(reply, /API key|429|Groq/);
+});

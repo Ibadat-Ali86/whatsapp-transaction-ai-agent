@@ -106,6 +106,7 @@ test('n8n v2 code nodes enforce caption, payload, idempotency, and Stripe gates'
   assert.equal(first.idempotency.key, 'whatsapp:message-001');
 
   const conflict = executeCodeNode(prepare, {
+    confidence: 1,
     fields: {
       email: 'different@example.com',
       amount_cents: 2500,
@@ -117,6 +118,7 @@ test('n8n v2 code nodes enforce caption, payload, idempotency, and Stripe gates'
   assert.equal(conflict.verification.reason_code, 'CAPTION_OCR_EMAIL_CONFLICT');
 
   const ready = executeCodeNode(prepare, {
+    confidence: 1,
     fields: {
       email: 'customer@example.com',
       amount_cents: 2500,
@@ -127,4 +129,16 @@ test('n8n v2 code nodes enforce caption, payload, idempotency, and Stripe gates'
   assert.equal(ready.ready_for_stripe, true);
   assert.equal(ready.stripe_request.email, 'customer@example.com');
   assert.equal(ready.stripe_request.amount_cents, 2500);
+
+  const lowConfidence = executeCodeNode(prepare, {
+    confidence: 0.42,
+    fields: {
+      email: 'customer@example.com',
+      amount_cents: 2500,
+      minutes: '31',
+      payment_date: '2026-09-09',
+    },
+  }, { references: { 'Validate Event': validated } })[0].json;
+  assert.equal(lowConfidence.ready_for_stripe, false);
+  assert.equal(lowConfidence.verification.reason_code, 'LOW_OCR_CONFIDENCE');
 });

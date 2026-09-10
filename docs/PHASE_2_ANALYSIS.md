@@ -96,6 +96,8 @@ v1 remains the rollback-safe OCR-only workflow.
 - Calls the internal verifier only when the event gate and required OCR
   evidence are present.
 - Rejects caption/OCR email conflicts without calling Stripe.
+- Requires OCR confidence of at least `0.85` before the Stripe branch can run;
+  low-confidence Tesseract fallback results remain non-approving.
 - Applies a bounded image-payload check and a 24-hour `source:message_id`
   duplicate guard before OCR.
 - Stores the internal verifier token only in an n8n credential reference; no

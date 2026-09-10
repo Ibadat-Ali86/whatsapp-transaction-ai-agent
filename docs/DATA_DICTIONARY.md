@@ -53,6 +53,11 @@ tesseract/groq/gemini.
 ocr_confidence
 Numeric diagnostic score.
 
+fallback_reason
+Safe reason when OCR returned a local Tesseract result because the optional
+cloud AI provider was unavailable. This result remains non-approving until
+the normal confidence and verification gates pass.
+
 ## Verification fields
 
 duplicate_image

@@ -115,8 +115,15 @@ OCR result:
     "customer_name": null,
     "status": null
   },
-  "confidence": 0.0
+  "confidence": 0.0,
+  "fallback_reason": null
 }
+
+If the optional AI provider is rate-limited or unavailable, the service
+returns the Tesseract result with `fallback_reason=AI_PROVIDER_UNAVAILABLE`
+instead of converting the whole OCR request into a server error. The
+confidence value remains authoritative for later manual-review and payment
+verification gates.
 
 Stripe verification request:
 
