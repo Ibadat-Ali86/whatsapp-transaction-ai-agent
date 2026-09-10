@@ -7,6 +7,18 @@
 4. Reconnect only after identifying reason.
 5. Do not delete auth state blindly.
 
+If other group members see “Waiting for this message”, restart with
+`RESET_GROUP_SENDER_KEYS_ON_START=true`. The bot refreshes allowlisted group
+metadata and invalidates only persisted sender-key memory so WhatsApp can
+redistribute group keys without deleting the linked-device login.
+
+If the problem continues, stop the bot and perform a controlled linked-device
+re-pair: preserve a backup of `auth/`, confirm the exact `AUTH_DIR`, remove
+only that active auth directory, and scan a new QR code. Never delete auth
+state while another bot process is running. Send a plain text test message to
+the group after re-pairing; existing “Waiting for this message” entries cannot
+be repaired retroactively.
+
 ## If OCR becomes inaccurate
 1. Stop automatic VALID decisions if accuracy is suspect.
 2. Review recent fixtures.

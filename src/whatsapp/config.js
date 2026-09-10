@@ -26,6 +26,7 @@ const config = {
   WHATSAPP_TEST_GROUP_JID: process.env.WHATSAPP_TEST_GROUP_JID || '',
   LOG_LEVEL: process.env.LOG_LEVEL || 'info',
   AUTH_DIR: process.env.AUTH_DIR || 'auth',
+  RESET_GROUP_SENDER_KEYS_ON_START: process.env.RESET_GROUP_SENDER_KEYS_ON_START !== 'false',
   TEMP_DIR: process.env.TEMP_DIR || 'tmp',
   OCR_TIMEOUT_MS: parseInteger(process.env.OCR_TIMEOUT_MS, 60000),
   MAX_IMAGE_SIZE_MB: parseInteger(process.env.MAX_IMAGE_SIZE_MB, 10),

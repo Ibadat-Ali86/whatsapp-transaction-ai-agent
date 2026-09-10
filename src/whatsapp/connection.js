@@ -248,6 +248,29 @@ async function createConnection({ onSocket } = {}) {
       }
     };
 
+    const resetAllowlistedGroupSenderKeys = async () => {
+      if (!config.RESET_GROUP_SENDER_KEYS_ON_START || !config.ALLOWED_GROUP_JIDS.length) {
+        return;
+      }
+
+      const senderKeyMemory = Object.fromEntries(
+        config.ALLOWED_GROUP_JIDS.map(groupJid => [groupJid, null]),
+      );
+
+      try {
+        // This clears only the local optimization that records which member
+        // devices already received the sender key. It does not delete auth,
+        // Signal sessions, or the linked-device identity.
+        await signalKeys.set({ 'sender-key-memory': senderKeyMemory });
+        logger.info(
+          { allowed_group_count: config.ALLOWED_GROUP_JIDS.length },
+          'Reset persisted group sender-key memory for key redistribution',
+        );
+      } catch (error) {
+        logger.warn({ err: error }, 'Unable to reset persisted group sender-key memory');
+      }
+    };
+
     sock.ev.on('groups.update', updates => {
       for (const update of updates || []) {
         void refreshAllowedGroupMetadata(update.id);
@@ -279,6 +302,10 @@ async function createConnection({ onSocket } = {}) {
         }
       } else if (connection === 'open') {
         reconnectAttempt = 0;
+        void resetAllowlistedGroupSenderKeys();
+        for (const groupJid of config.ALLOWED_GROUP_JIDS) {
+          void refreshAllowedGroupMetadata(groupJid);
+        }
         logger.info({ allowed_group_count: config.ALLOWED_GROUP_JIDS.length }, 'WhatsApp connection opened successfully.');
       }
     });
