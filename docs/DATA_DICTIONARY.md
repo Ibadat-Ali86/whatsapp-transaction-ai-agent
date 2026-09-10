@@ -24,8 +24,8 @@ is_forwarded
 Boolean forwarded-message flag.
 
 caption_email
-Normalized email supplied as the WhatsApp image caption. Lookup hint only;
-not payment proof.
+Normalized email supplied as the WhatsApp image caption. This is the primary
+Stripe lookup identity; it is still user-supplied input and not payment proof.
 
 ## OCR fields
 
@@ -55,8 +55,8 @@ Numeric diagnostic score.
 
 fallback_reason
 Safe reason when OCR returned a local Tesseract result because the optional
-cloud AI provider was unavailable. This result remains non-approving until
-the normal confidence and verification gates pass.
+cloud AI provider was unavailable. Low-confidence OCR fields are not sent as
+Stripe constraints; Stripe may still perform the separate caption-email lookup.
 
 ## Verification fields
 
@@ -74,6 +74,10 @@ MATCHED/NO_MATCH/AMBIGUOUS/ERROR.
 
 stripe_reason_code
 Stable safe reason for the Stripe result.
+
+matched_transaction
+Canonical amount, local date/time, customer name, status, and payment method
+returned only for one eligible Stripe match.
 
 verdict
 VALID/FAKE/DUPLICATE/SUSPICIOUS/UNCLEAR/ERROR.

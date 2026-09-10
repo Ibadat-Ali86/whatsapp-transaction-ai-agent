@@ -122,8 +122,9 @@ OCR result:
 If the optional AI provider is rate-limited or unavailable, the service
 returns the Tesseract result with `fallback_reason=AI_PROVIDER_UNAVAILABLE`
 instead of converting the whole OCR request into a server error. The
-confidence value remains authoritative for later manual-review and payment
-verification gates.
+confidence value controls whether OCR fields are sent as Stripe constraints;
+low-confidence OCR is omitted while the normalized caption email may still be
+used for a separate, fail-closed Stripe lookup.
 
 Stripe verification request:
 
@@ -138,11 +139,14 @@ Stripe verification request:
   "payment_method_type": "cashapp"
 }
 
-The server-side verifier reads Stripe charges in test mode, paginates within
-the configured local-date window, and approves only one exact match. Multiple
-matches, missing time evidence, mismatched amounts, and API failures remain
-non-approving outcomes. The endpoint requires an internal service token and
-Stripe keys are never accepted from request payloads.
+`amount_cents`, `payment_date`, `minutes`, and `payment_hour` are optional.
+The normalized caption email is the lookup identity. When OCR evidence is
+missing or below the confidence threshold, the verifier searches the matching
+Stripe customer charges and returns the canonical amount, date, time, name,
+and status only when exactly one eligible charge matches. Multiple matches,
+email conflicts, and API failures remain non-approving outcomes. The endpoint
+requires an internal service token and Stripe keys are never accepted from
+request payloads.
 
 ## Financial data rules
 

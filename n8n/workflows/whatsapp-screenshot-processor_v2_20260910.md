@@ -20,9 +20,11 @@ minute. If OCR email conflicts with the required caption email, the workflow
 returns `UNCLEAR` without calling Stripe. Missing evidence also remains
 non-approving.
 
-The Stripe branch also requires OCR confidence of at least `0.85`. A local
-Tesseract result returned after an AI-provider outage remains non-approving
-until that confidence gate is satisfied.
+The normalized caption email is the required Stripe lookup identity. OCR
+amount/date/time are passed as optional constraints only when confidence is at
+least `0.85`; otherwise Stripe is queried by caption email and supplies the
+canonical transaction fields. Email conflicts and ambiguous matches remain
+non-approving.
 
 Malformed identity, caption, or image input is rejected with a structured HTTP
 `400` response before idempotency or OCR processing.

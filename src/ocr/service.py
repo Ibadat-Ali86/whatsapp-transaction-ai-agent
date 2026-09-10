@@ -37,9 +37,9 @@ class OCRRequest(BaseModel):
 class StripeVerificationRequest(BaseModel):
     processing_id: str = Field(..., min_length=1, max_length=128)
     email: str = Field(..., min_length=3, max_length=512)
-    amount_cents: int = Field(..., gt=0, le=100_000_000)
-    payment_date: date
-    minutes: int = Field(..., ge=0, le=59)
+    amount_cents: Optional[int] = Field(default=None, gt=0, le=100_000_000)
+    payment_date: Optional[date] = None
+    minutes: Optional[int] = Field(default=None, ge=0, le=59)
     payment_hour: Optional[int] = Field(default=None, ge=0, le=23)
     currency: str = Field(default="usd", min_length=3, max_length=3)
     payment_method_type: str = Field(default="cashapp", min_length=1, max_length=32)
@@ -153,6 +153,7 @@ async def verify_stripe(
         timeout_seconds=settings.STRIPE_TIMEOUT_SECONDS,
         timezone_name=settings.STRIPE_TIMEZONE,
         max_pages=settings.STRIPE_MAX_PAGES,
+        lookback_days=settings.STRIPE_LOOKBACK_DAYS,
         allowed_payment_method_type=settings.STRIPE_ALLOWED_PAYMENT_METHOD_TYPE,
     )
     evidence = PaymentEvidence(

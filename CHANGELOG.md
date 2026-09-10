@@ -1,5 +1,12 @@
 # CHANGELOG
 
+## 0.3.5 — Caption identity and Stripe canonical fields
+- Use the WhatsApp caption email as the primary lookup identity in replies and
+  the n8n Stripe branch.
+- Support safe email-only Stripe test-mode lookup with canonical transaction
+  amount, date, time, name, and status.
+- Keep ambiguous and caption/OCR-conflict cases non-approving.
+
 ## 0.3.4 — OCR provider resilience
 - Preserve Tesseract results when the optional Groq/Gemini fallback is
   unavailable or rate-limited.

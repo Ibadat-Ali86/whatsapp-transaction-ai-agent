@@ -104,7 +104,7 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
             captionEmail,
           });
           
-          const replyText = formatOcrReply(ocrResult, processingId);
+          const replyText = formatOcrReply(ocrResult, processingId, captionEmail);
           
           if (config.BOT_REPLY_ENABLED) {
             await sock.sendMessage(groupId, { text: replyText }, { quoted: msg });

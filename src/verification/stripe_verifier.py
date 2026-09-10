@@ -1,9 +1,9 @@
 """Read-only, test-mode Stripe transaction verification.
 
-The verifier treats OCR and the WhatsApp caption as untrusted evidence. It
-only returns VALID after a single Stripe charge matches the normalized email,
-integer amount, currency, payment method, and configured local timestamp
-criteria. Ambiguous or incomplete evidence is never approved.
+The verifier uses the normalized WhatsApp caption email as the lookup identity
+and treats OCR fields as optional constraints. It only returns VALID after a
+single eligible Stripe charge matches; ambiguous or conflicting evidence is
+never approved.
 """
 
 from __future__ import annotations
@@ -30,9 +30,9 @@ EMAIL_PATTERN = re.compile(
 @dataclass(frozen=True)
 class PaymentEvidence:
     email: str
-    amount_cents: int
-    payment_date: date
-    minutes: int
+    amount_cents: Optional[int] = None
+    payment_date: Optional[date] = None
+    minutes: Optional[int] = None
     payment_hour: Optional[int] = None
     currency: str = "usd"
     payment_method_type: str = "cashapp"
@@ -48,9 +48,10 @@ class StripeVerificationResult:
     candidate_count: int = 0
     email_hash: Optional[str] = None
     retryable: bool = False
+    matched_transaction: Optional[dict[str, Any]] = None
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "processing_id": self.processing_id,
             "provider": "stripe",
             "status": self.status,
@@ -61,6 +62,9 @@ class StripeVerificationResult:
             "email_hash": self.email_hash,
             "retryable": self.retryable,
         }
+        if self.matched_transaction is not None:
+            result["matched_transaction"] = self.matched_transaction
+        return result
 
 
 class StripeVerificationError(Exception):
@@ -110,6 +114,7 @@ class StripeVerifier:
         timeout_seconds: float = 15.0,
         timezone_name: str = "UTC",
         max_pages: int = 10,
+        lookback_days: int = 90,
         allowed_payment_method_type: str = "cashapp",
         http_client: Optional[httpx.AsyncClient] = None,
         audit_logger: Optional[AuditLogger] = None,
@@ -121,6 +126,7 @@ class StripeVerifier:
         self.timeout_seconds = timeout_seconds
         self.timezone_name = timezone_name
         self.max_pages = max_pages
+        self.lookback_days = lookback_days
         self.allowed_payment_method_type = allowed_payment_method_type.casefold()
         self.http_client = http_client
         self.audit_logger = audit_logger or AuditLogger("stripe_verifier")
@@ -134,6 +140,8 @@ class StripeVerifier:
             raise StripeVerificationError("STRIPE_TEST_SECRET_REQUIRED")
         if self.max_pages < 1 or self.max_pages > 100:
             raise StripeVerificationError("STRIPE_MAX_PAGES_INVALID")
+        if self.lookback_days < 1 or self.lookback_days > 3650:
+            raise StripeVerificationError("STRIPE_LOOKBACK_DAYS_INVALID")
 
     async def _get(self, client: httpx.AsyncClient, path: str, params: dict[str, Any]) -> dict[str, Any]:
         headers = {"accept": "application/json"}
@@ -225,6 +233,45 @@ class StripeVerifier:
 
         raise StripeVerificationError("STRIPE_PAGINATION_LIMIT", retryable=False)
 
+    async def _charges_for_customers(
+        self,
+        client: httpx.AsyncClient,
+        customer_ids: set[str],
+    ) -> list[dict[str, Any]]:
+        charges: list[dict[str, Any]] = []
+        seen_charge_ids: set[str] = set()
+
+        for customer_id in customer_ids:
+            starting_after: Optional[str] = None
+            for _ in range(self.max_pages):
+                params: dict[str, Any] = {"customer": customer_id, "limit": 100}
+                if starting_after:
+                    params["starting_after"] = starting_after
+
+                body = await self._get(client, "/v1/charges", params)
+                page = body.get("data", [])
+                if not isinstance(page, list):
+                    raise StripeVerificationError("STRIPE_INVALID_RESPONSE", retryable=True)
+
+                for item in page:
+                    if not isinstance(item, dict):
+                        continue
+                    charge_id = item.get("id")
+                    if not isinstance(charge_id, str) or charge_id not in seen_charge_ids:
+                        charges.append(item)
+                        if isinstance(charge_id, str):
+                            seen_charge_ids.add(charge_id)
+
+                if not body.get("has_more"):
+                    break
+                if not page or not isinstance(page[-1].get("id"), str):
+                    raise StripeVerificationError("STRIPE_INVALID_PAGINATION", retryable=True)
+                starting_after = page[-1]["id"]
+            else:
+                raise StripeVerificationError("STRIPE_PAGINATION_LIMIT", retryable=False)
+
+        return charges
+
     @staticmethod
     def _charge_email(charge: dict[str, Any]) -> Optional[str]:
         receipt_email = charge.get("receipt_email")
@@ -248,7 +295,7 @@ class StripeVerifier:
         if not email_matches:
             return False
 
-        if charge.get("amount") != evidence.amount_cents:
+        if evidence.amount_cents is not None and charge.get("amount") != evidence.amount_cents:
             return False
         if str(charge.get("currency", "")).casefold() != evidence.currency:
             return False
@@ -268,11 +315,41 @@ class StripeVerifier:
         local_created = _charge_local_datetime(charge, zone)
         if local_created is None:
             return False
-        if local_created.date() != evidence.payment_date or local_created.minute != evidence.minutes:
+        if evidence.payment_date is not None and local_created.date() != evidence.payment_date:
+            return False
+        if evidence.minutes is not None and local_created.minute != evidence.minutes:
             return False
         if evidence.payment_hour is not None and local_created.hour != evidence.payment_hour:
             return False
         return True
+
+    @staticmethod
+    def _transaction_details(charge: dict[str, Any], zone: ZoneInfo) -> Optional[dict[str, Any]]:
+        local_created = _charge_local_datetime(charge, zone)
+        if local_created is None:
+            return None
+
+        payment_method_details = charge.get("payment_method_details")
+        payment_method_type = None
+        if isinstance(payment_method_details, dict):
+            payment_method_type = payment_method_details.get("type")
+
+        billing_details = charge.get("billing_details")
+        customer_name = None
+        if isinstance(billing_details, dict) and isinstance(billing_details.get("name"), str):
+            customer_name = billing_details["name"]
+
+        return {
+            "amount_cents": charge.get("amount"),
+            "currency": charge.get("currency"),
+            "payment_date": local_created.date().isoformat(),
+            "payment_hour": local_created.hour,
+            "minutes": local_created.minute,
+            "payment_time": local_created.strftime("%H:%M"),
+            "customer_name": customer_name,
+            "status": "Completed" if charge.get("paid") is True and charge.get("status") == "succeeded" else charge.get("status"),
+            "payment_method_type": payment_method_type,
+        }
 
     async def verify(self, evidence: PaymentEvidence, processing_id: str) -> StripeVerificationResult:
         try:
@@ -295,7 +372,14 @@ class StripeVerifier:
         email_hash = _email_hash(evidence.email)
         try:
             self._validate_configuration()
-            start_timestamp, end_timestamp, zone = _local_day_bounds(evidence.payment_date, self.timezone_name)
+            if evidence.payment_date is not None:
+                start_timestamp, end_timestamp, zone = _local_day_bounds(evidence.payment_date, self.timezone_name)
+            else:
+                try:
+                    zone = ZoneInfo(self.timezone_name)
+                except ZoneInfoNotFoundError as exc:
+                    raise ValueError("invalid Stripe timezone configuration") from exc
+                start_timestamp = end_timestamp = 0
         except (StripeVerificationError, TypeError, ValueError) as exc:
             reason_code = exc.reason_code if isinstance(exc, StripeVerificationError) else str(exc)
             result = StripeVerificationResult(processing_id, "ERROR", "ERROR", reason_code, email_hash=email_hash)
@@ -306,18 +390,34 @@ class StripeVerifier:
         client = self.http_client or httpx.AsyncClient(timeout=self.timeout_seconds)
         try:
             customer_ids = await self._customer_ids(client, evidence.email)
-            charges = await self._charges_for_day(client, start_timestamp, end_timestamp)
+            if evidence.payment_date is not None:
+                charges = await self._charges_for_day(client, start_timestamp, end_timestamp)
+            elif customer_ids:
+                charges = await self._charges_for_customers(client, customer_ids)
+            else:
+                now_timestamp = int(datetime.now(timezone.utc).timestamp())
+                charges = await self._charges_for_day(
+                    client,
+                    now_timestamp - int(timedelta(days=self.lookback_days).total_seconds()),
+                    now_timestamp,
+                )
             matches = [charge for charge in charges if self._matches(charge, evidence, customer_ids, zone)]
 
             if len(matches) == 1:
+                matched_transaction = self._transaction_details(matches[0], zone)
+                has_ocr_constraints = any(
+                    value is not None
+                    for value in (evidence.amount_cents, evidence.payment_date, evidence.minutes, evidence.payment_hour)
+                )
                 result = StripeVerificationResult(
                     processing_id,
                     "MATCHED",
                     "VALID",
-                    "EXACT_SINGLE_MATCH",
+                    "EXACT_SINGLE_MATCH" if has_ocr_constraints else "EMAIL_SINGLE_MATCH",
                     stripe_charge_id=matches[0].get("id"),
                     candidate_count=1,
                     email_hash=email_hash,
+                    matched_transaction=matched_transaction,
                 )
             elif len(matches) > 1:
                 result = StripeVerificationResult(

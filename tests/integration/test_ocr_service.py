@@ -149,6 +149,7 @@ class TestStripeVerificationEndpoint:
             STRIPE_TIMEOUT_SECONDS=15.0,
             STRIPE_TIMEZONE="UTC",
             STRIPE_MAX_PAGES=10,
+            STRIPE_LOOKBACK_DAYS=90,
             STRIPE_ALLOWED_PAYMENT_METHOD_TYPE="cashapp",
         )
 

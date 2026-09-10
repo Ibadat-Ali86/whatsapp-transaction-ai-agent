@@ -139,6 +139,8 @@ test('n8n v2 code nodes enforce caption, payload, idempotency, and Stripe gates'
       payment_date: '2026-09-09',
     },
   }, { references: { 'Validate Event': validated } })[0].json;
-  assert.equal(lowConfidence.ready_for_stripe, false);
-  assert.equal(lowConfidence.verification.reason_code, 'LOW_OCR_CONFIDENCE');
+  assert.equal(lowConfidence.ready_for_stripe, true);
+  assert.equal(lowConfidence.verification.reason_code, 'EMAIL_LOOKUP_WITHOUT_OCR_EVIDENCE');
+  assert.equal(lowConfidence.stripe_request.amount_cents, null);
+  assert.equal(lowConfidence.stripe_request.payment_date, null);
 });

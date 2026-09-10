@@ -31,9 +31,11 @@ Phase 2 Step 1 contract:
 - The adapter sends an `X-Webhook-Token` header when configured. The n8n
   webhook must use header authentication; token values are never exported.
 - The webhook response is returned to Baileys as the OCR/workflow result.
-- The v2 export may route structured OCR evidence to the internal Stripe
-  verifier only when `stripe_verification_enabled` is true and evidence is
-  complete. The v1 export remains OCR-only.
+- The v2 export routes the normalized caption email to the internal Stripe
+  verifier when `stripe_verification_enabled` is true. OCR amount/date/time
+  fields are optional constraints; when OCR is incomplete or low-confidence,
+  Stripe remains the canonical source for those transaction fields. The v1
+  export remains OCR-only.
 - Message ID plus source is the idempotency key. Baileys claims the key before
   dispatch; v2 also applies a 24-hour active-workflow guard and returns a safe
   duplicate response without re-running OCR. A shared store is required for

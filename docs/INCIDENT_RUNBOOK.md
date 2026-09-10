@@ -20,7 +20,9 @@
 Configured behavior:
 - preserve the local Tesseract extraction when available;
 - expose a safe `AI_PROVIDER_UNAVAILABLE` fallback reason;
-- keep the confidence score and do not approve low-confidence evidence;
+- keep the confidence score and do not use low-confidence OCR as Stripe
+  evidence; the Stripe branch may still perform a separate caption-email
+  lookup;
 - log safe error;
 - optionally retry according to policy after the local fallback.
 

@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     STRIPE_TIMEOUT_SECONDS: float = 15.0
     STRIPE_TIMEZONE: str = 'UTC'
     STRIPE_MAX_PAGES: int = 10
+    STRIPE_LOOKBACK_DAYS: int = 90
     STRIPE_ALLOWED_PAYMENT_METHOD_TYPE: str = 'cashapp'
 
     model_config = SettingsConfigDict(env_file='.env', env_file_encoding='utf-8', extra='ignore')

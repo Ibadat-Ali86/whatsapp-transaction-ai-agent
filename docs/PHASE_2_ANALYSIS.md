@@ -76,8 +76,8 @@ This exercises the real message handler and n8n client with
   configuration and never from a request.
 - Requires a separate `X-Internal-Service-Token` before any Stripe call.
 - Uses read-only customer and charge list endpoints with pagination.
-- Requires test mode, exact integer cents, normalized email, date/minute, and
-  a single matching charge. Ambiguity returns `UNCLEAR`.
+- Requires test mode, normalized email, and a single eligible matching charge;
+  OCR amount/date/time are optional constraints. Ambiguity returns `UNCLEAR`.
 - Emits a safe audit event with a one-way email hash and no authorization data.
 - The real FastAPI endpoint was exercised against a disposable local
   Stripe-compatible fixture: missing internal token returned `401`, and a
@@ -93,11 +93,14 @@ v1 remains the rollback-safe OCR-only workflow.
 
 - Added `whatsapp-screenshot-processor_v2_20260910.json`.
 - Preserves OCR-only behavior when `STRIPE_VERIFICATION_ENABLED=false`.
-- Calls the internal verifier only when the event gate and required OCR
-  evidence are present.
+- Calls the internal verifier when the event gate and normalized caption email
+  are present, even if OCR evidence is incomplete.
 - Rejects caption/OCR email conflicts without calling Stripe.
-- Requires OCR confidence of at least `0.85` before the Stripe branch can run;
-  low-confidence Tesseract fallback results remain non-approving.
+- Uses the normalized caption email as the required Stripe lookup identity;
+  OCR amount/date/time are optional constraints and Stripe supplies canonical
+  transaction fields when OCR is incomplete.
+- Blocks caption/OCR email conflicts and ambiguous email-only matches; a
+  single eligible Stripe charge is required for `VALID`.
 - Applies a bounded image-payload check and a 24-hour `source:message_id`
   duplicate guard before OCR.
 - Stores the internal verifier token only in an n8n credential reference; no
@@ -132,7 +135,7 @@ curl --fail-with-body -X POST http://127.0.0.1:8000/api/v1/verification/stripe \
   }'
 ```
 
-Expected outcomes are `VALID` only for one exact Stripe match;
+Expected outcomes are `VALID` only for one eligible Stripe match;
 `NO_MATCH`/`UNCLEAR` for no match; `AMBIGUOUS`/`UNCLEAR` for collisions; and
 `ERROR` for configuration or Stripe API failures. A missing or incorrect
 internal token must return HTTP 401, and Stripe verification must remain

@@ -41,7 +41,7 @@ def evidence(**overrides) -> PaymentEvidence:
     return PaymentEvidence(**value)
 
 
-async def verify_with_responses(responses, **verifier_options):
+async def verify_with_responses(responses, evidence_value=None, **verifier_options):
     requests = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -56,7 +56,7 @@ async def verify_with_responses(responses, **verifier_options):
             timezone_name="UTC",
             **verifier_options,
         )
-        result = await verifier.verify(evidence(), "wa-test-stripe")
+        result = await verifier.verify(evidence_value or evidence(), "wa-test-stripe")
     return result, requests
 
 
@@ -77,6 +77,28 @@ async def test_matches_one_exact_cash_app_charge():
     assert result.stripe_charge_id == "ch_match"
     assert len(requests) == 2
     assert all("sk_test_unit_test_key" not in str(request.headers) for request in requests)
+
+
+@pytest.mark.asyncio
+async def test_email_only_lookup_returns_canonical_stripe_transaction():
+    def responses(request):
+        if request.url.path == "/v1/customers":
+            return httpx.Response(200, json={"data": [{"id": "cus_customer", "email": "customer@example.com"}]})
+        assert request.url.path == "/v1/charges"
+        assert request.url.params["customer"] == "cus_customer"
+        return httpx.Response(200, json={"data": [charge()], "has_more": False})
+
+    result, _ = await verify_with_responses(
+        responses,
+        evidence_value=PaymentEvidence(email="customer@example.com"),
+    )
+
+    assert result.status == "MATCHED"
+    assert result.verdict == "VALID"
+    assert result.reason_code == "EMAIL_SINGLE_MATCH"
+    assert result.matched_transaction["amount_cents"] == 2500
+    assert result.matched_transaction["payment_date"] == "2026-09-09"
+    assert result.matched_transaction["minutes"] == 31
 
 
 @pytest.mark.asyncio
