@@ -2,10 +2,12 @@ const axios = require('axios');
 const config = require('./config');
 
 class N8nServiceError extends Error {
-  constructor(message, retryable = false) {
+  constructor(message, retryable = false, details = {}) {
     super(message);
     this.name = 'N8nServiceError';
     this.retryable = retryable;
+    this.status = details.status ?? null;
+    this.code = details.code ?? null;
   }
 }
 
@@ -21,6 +23,26 @@ function isRetryableError(error) {
 
 function wait(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function buildHealthUrl(clientConfig) {
+  const baseUrl = clientConfig.N8N_BASE_URL || 'http://localhost:5678';
+  return new URL('/healthz', baseUrl).toString();
+}
+
+async function checkN8nServiceHealth(options = {}) {
+  const clientConfig = options.config || {};
+  const httpClient = options.httpClient || axios;
+  const timeout = Number.isInteger(clientConfig.N8N_HEALTH_TIMEOUT_MS)
+    ? clientConfig.N8N_HEALTH_TIMEOUT_MS
+    : 5000;
+
+  try {
+    const response = await httpClient.get(buildHealthUrl(clientConfig), { timeout });
+    return Number.isInteger(response?.status) && response.status >= 200 && response.status < 300;
+  } catch (_error) {
+    return false;
+  }
 }
 
 async function processImageViaN8n(payload, options = {}) {
@@ -56,7 +78,11 @@ async function processImageViaN8n(payload, options = {}) {
       if (!retryable || attempt === retryAttempts) {
         if (error instanceof N8nServiceError) throw error;
         const status = error?.response?.status || 'network';
-        throw new N8nServiceError(`n8n webhook request failed (${status})`, retryable);
+        throw new N8nServiceError(
+          `n8n webhook request failed (${status})`,
+          retryable,
+          { status: error?.response?.status ?? null, code: error?.code ?? null },
+        );
       }
 
       logger.warn({ attempt, retry_in_ms: 1000 }, 'n8n webhook request failed; retrying');
@@ -67,4 +93,9 @@ async function processImageViaN8n(payload, options = {}) {
   throw new N8nServiceError('n8n webhook request failed', true);
 }
 
-module.exports = { processImageViaN8n, N8nServiceError, buildWebhookUrl };
+module.exports = {
+  processImageViaN8n,
+  checkN8nServiceHealth,
+  N8nServiceError,
+  buildWebhookUrl,
+};

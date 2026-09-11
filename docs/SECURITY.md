@@ -4,7 +4,9 @@
 
 1. Least privilege.
 2. Secrets outside source code.
-3. No production credentials in development.
+3. No production credentials in development by default. If live-mode acceptance
+   is explicitly approved, use only a restricted read-only key, a dedicated
+   allowlisted group, and an isolated environment.
 4. No client screenshots in public repositories.
 5. Minimize data retention.
 6. Explicit external data transfer.

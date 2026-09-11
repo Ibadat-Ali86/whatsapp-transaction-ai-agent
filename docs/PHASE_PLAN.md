@@ -36,7 +36,7 @@ Deliver:
 Exit:
 - end-to-end local event succeeds.
 
-## Phase 3 — Duplicate detection
+## Phase 3 — Duplicate detection (implemented for the local multi-group bot)
 Deliver:
 - SHA256;
 - pHash;
@@ -44,7 +44,13 @@ Deliver:
 - tests for resized/recompressed images.
 
 Exit:
-- duplicate test matrix passes.
+- duplicate test matrix passes;
+- exact image resends are detected across allowlisted groups and restarts;
+- uniquely matched Stripe charge IDs are claimed once.
+
+Production note: the current persisted JSON store supports one bot process.
+Use a shared transactional store before running multiple bot processes or
+hosts.
 
 ## Phase 4 — Stripe verification
 Deliver:

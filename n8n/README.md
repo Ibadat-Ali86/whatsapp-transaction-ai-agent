@@ -13,13 +13,13 @@ Phase 2 Step 1 is exported at
 the adjacent Markdown file. The v1 workflow remains the rollback-safe
 OCR-only option.
 
-The gated Stripe test-mode route is exported at
+The gated Stripe read-only route is exported at
 `workflows/whatsapp-screenshot-processor_v2_20260910.json`. Keep v1 as the
-rollback-safe OCR-only workflow until v2's n8n, verifier, and Stripe test
+rollback-safe OCR-only workflow until v2's n8n, verifier, and approved Stripe
 fixtures pass together. The v2 export has passed isolated n8n `1.100.1`
-authenticated OCR, duplicate, invalid-token, invalid-caption, and
-caption/OCR-conflict acceptance checks; live WhatsApp and Stripe fixtures are
-still required before production activation.
+authenticated OCR, duplicate, invalid-token, invalid-caption, caption-driven
+Stripe lookup, and receipt-email fallback checks; live WhatsApp and Stripe
+fixtures are still required before production activation.
 
 For a repeatable local adapter check, start the OCR service and imported n8n
 workflow, then run `N8N_BASE_URL=http://127.0.0.1:5678

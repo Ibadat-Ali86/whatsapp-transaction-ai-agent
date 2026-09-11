@@ -1,3 +1,4 @@
+import asyncio
 import time
 import secrets
 from datetime import date, datetime, timezone
@@ -10,7 +11,7 @@ from typing import Optional
 
 from src.config.settings import get_settings
 from src.logging.audit import AuditLogger
-from src.utils.image_utils import generate_processing_id, base64_to_bytes
+from src.utils.image_utils import generate_processing_id, base64_to_bytes, compute_sha256, compute_perceptual_hash
 from src.ocr.engine import OCREngine
 from src.verification.stripe_verifier import PaymentEvidence, StripeVerifier, normalize_email
 
@@ -36,7 +37,7 @@ class OCRRequest(BaseModel):
 
 class StripeVerificationRequest(BaseModel):
     processing_id: str = Field(..., min_length=1, max_length=128)
-    email: str = Field(..., min_length=3, max_length=512)
+    email: Optional[str] = Field(default=None, min_length=3, max_length=512)
     amount_cents: Optional[int] = Field(default=None, gt=0, le=100_000_000)
     payment_date: Optional[date] = None
     minutes: Optional[int] = Field(default=None, ge=0, le=59)
@@ -46,7 +47,9 @@ class StripeVerificationRequest(BaseModel):
 
     @field_validator("email")
     @classmethod
-    def validate_email(cls, value: str) -> str:
+    def validate_email(cls, value: Optional[str]) -> Optional[str]:
+        if value is None or not value.strip():
+            return None
         return normalize_email(value)
 
     @field_validator("currency")
@@ -88,8 +91,25 @@ async def process_ocr(request: OCRRequest):
         image_bytes = base64_to_bytes(request.image_base64)
     except ValueError:
         raise HTTPException(status_code=422, detail="Invalid base64 string")
+
+    image_sha256 = compute_sha256(image_bytes)
+    try:
+        image_phash = compute_perceptual_hash(image_bytes)
+    except Exception:
+        # OCR remains usable for an unusual image decoder failure; exact hash
+        # duplicate detection still works in the WhatsApp adapter.
+        image_phash = None
         
-    result = OCREngine.process_image(image_bytes, proc_id, request.mime_type)
+    # Tesseract and the optional AI fallback are synchronous and may perform
+    # subprocess/network work. Keep them off FastAPI's event loop so health,
+    # authentication, and verification requests remain responsive while an
+    # image is being processed.
+    result = await asyncio.to_thread(
+        OCREngine.process_image,
+        image_bytes,
+        proc_id,
+        request.mime_type,
+    )
     
     if result.error:
         # Do not leak internal error info
@@ -109,6 +129,7 @@ async def process_ocr(request: OCRRequest):
             "email": result.fields.email,
             "amount_cents": result.fields.amount_cents,
             "minutes": result.fields.minutes,
+            "payment_hour": result.fields.payment_hour,
             "payment_date": result.fields.payment_date,
             "customer_name": result.fields.customer_name,
             "status": result.fields.status,
@@ -123,7 +144,9 @@ async def process_ocr(request: OCRRequest):
         "confidence": result.confidence,
         "tesseract_confidence": result.tesseract_confidence,
         "ai_used": result.ai_used,
-        "processing_time_ms": result.processing_time_ms
+        "processing_time_ms": result.processing_time_ms,
+        "image_sha256": image_sha256,
+        "image_phash": image_phash,
     }
     if result.fallback_reason:
         response_data["fallback_reason"] = result.fallback_reason

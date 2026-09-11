@@ -8,6 +8,7 @@ class ExtractedFields:
     email: Optional[str] = None
     amount_cents: Optional[int] = None
     minutes: Optional[str] = None
+    payment_hour: Optional[int] = None
     payment_date: Optional[str] = None
     customer_name: Optional[str] = None
     status: Optional[str] = None
@@ -33,10 +34,23 @@ class FieldExtractor:
             except Exception as e:
                 fields.extraction_warnings.append(f"Failed to parse amount: {e}")
                 
-        # Minutes
-        minute_match = re.search(r'\b\d{1,2}:([0-5]\d)(?::[0-5]\d)?\b', raw_text)
-        if minute_match:
-            fields.minutes = minute_match.group(1)
+        # Payment time. Keep both components so a captionless lookup can use
+        # amount + hour/minute as independent deterministic evidence.
+        time_match = re.search(r'\b(\d{1,2}):([0-5]\d)(?:\s*([AP]M))?\b', raw_text, re.IGNORECASE)
+        if time_match:
+            hour = int(time_match.group(1))
+            fields.minutes = time_match.group(2)
+            meridiem = (time_match.group(3) or '').upper()
+            if meridiem:
+                if hour < 1 or hour > 12:
+                    fields.extraction_warnings.append('Invalid 12-hour payment time')
+                else:
+                    if meridiem == 'AM':
+                        fields.payment_hour = 0 if hour == 12 else hour
+                    else:
+                        fields.payment_hour = 12 if hour == 12 else hour + 12
+            elif 0 <= hour <= 23:
+                fields.payment_hour = hour
             
         # Date (simple heuristics)
         date_match = re.search(r'\b(?:19|20)\d{2}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])\b', raw_text)
@@ -68,6 +82,8 @@ class FieldExtractor:
                     fields.extraction_warnings.append(f"Failed to parse AI amount: {e}")
                     
         fields.minutes = str(ai_json.get('minutes')) if ai_json.get('minutes') is not None else None
+        payment_hour = ai_json.get('payment_hour')
+        fields.payment_hour = int(payment_hour) if isinstance(payment_hour, int) and 0 <= payment_hour <= 23 else None
         fields.payment_date = ai_json.get('payment_date')
         fields.customer_name = ai_json.get('customer_name')
         fields.status = ai_json.get('status')

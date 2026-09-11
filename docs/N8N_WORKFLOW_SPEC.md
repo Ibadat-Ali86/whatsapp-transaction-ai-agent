@@ -26,16 +26,18 @@ Phase 2 Step 1 contract:
 - The Baileys adapter sends `POST /webhook/whatsapp-screenshot`.
 - The request must include `message_id`, `group_id`, `sender_jid`,
   `processing_id`, `caption_email`, and the image `{mime_type, base64}`.
-- `caption_email` must be a single syntactically valid email. It is an input
-  identifier, not proof that a payment is valid.
+- `caption_email` is optional. When present and syntactically valid it is the
+  preferred lookup hint, not proof that a payment is valid. Missing, malformed,
+  or stale captions are not treated as payment proof or a processing blocker.
 - The adapter sends an `X-Webhook-Token` header when configured. The n8n
   webhook must use header authentication; token values are never exported.
 - The webhook response is returned to Baileys as the OCR/workflow result.
-- The v2 export routes the normalized caption email to the internal Stripe
-  verifier when `stripe_verification_enabled` is true. OCR amount/date/time
-  fields are optional constraints; when OCR is incomplete or low-confidence,
-  Stripe remains the canonical source for those transaction fields. The v1
-  export remains OCR-only.
+- The v2 export routes caption/OCR identity plus deterministic amount/date/time
+  evidence to the internal Stripe verifier when `stripe_verification_enabled`
+  is true. Stripe remains the canonical source for amount, date, time, name,
+  customer email, and status. A missing/stale caption can recover the email
+  only from one unambiguous eligible charge; otherwise the verdict is UNCLEAR.
+  The v1 export remains OCR-only.
 - Message ID plus source is the idempotency key. Baileys claims the key before
   dispatch; v2 also applies a 24-hour active-workflow guard and returns a safe
   duplicate response without re-running OCR. A shared store is required for

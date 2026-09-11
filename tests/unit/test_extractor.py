@@ -108,6 +108,16 @@ class TestMinutesExtraction:
         fields = FieldExtractor.extract_from_text(text, "test-pid-023")
         assert fields.minutes == "00"
 
+    def test_extracts_24_hour_payment_hour(self):
+        fields = FieldExtractor.extract_from_text("Today at 14:23", "test-pid-024")
+        assert fields.payment_hour == 14
+        assert fields.minutes == "23"
+
+    def test_converts_12_hour_payment_hour(self):
+        fields = FieldExtractor.extract_from_text("Today at 2:23 PM", "test-pid-025")
+        assert fields.payment_hour == 14
+        assert fields.minutes == "23"
+
 
 # ===========================================================================
 # Date extraction

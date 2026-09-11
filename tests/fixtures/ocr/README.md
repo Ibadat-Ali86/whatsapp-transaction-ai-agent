@@ -30,6 +30,7 @@ Each fixture is a **pair of files**:
 **Field rules:**
 - `amount_cents` — **integer cents only** (`$25.00` → `2500`). Never float.
 - `minutes` — two-digit string `"00"`–`"59"`. Null if not present.
+- `payment_hour` — local payment hour in 24-hour form (`0`–`23`). Null if not present.
 - `payment_date` — ISO 8601 `YYYY-MM-DD`. Null if not present.
 - Any field may be `null` if genuinely absent from the screenshot.
 

@@ -11,7 +11,7 @@ function formatOcrReply(ocrResult, processingId, captionEmail = null) {
   const fields = ocrResult?.fields || ocrResult || {};
   const verification = ocrResult?.verification;
   const stripeTransaction = verification?.matched_transaction || {};
-  const email = captionEmail || ocrResult?.caption_email || fields.email || 'Not found';
+  const email = stripeTransaction.customer_email || captionEmail || ocrResult?.caption_email || fields.email || 'Not found';
   const amountCents = stripeTransaction.amount_cents ?? fields.amount_cents;
   const amount = amountCents != null
     ? `$${(amountCents / 100).toFixed(2)}`
@@ -22,6 +22,16 @@ function formatOcrReply(ocrResult, processingId, captionEmail = null) {
   const status = stripeTransaction.status || fields.status || 'Not found';
   const confidence = ocrResult?.confidence != null ? Math.round(ocrResult.confidence * 100) : 0;
   const provider = ocrResult?.provider || 'tesseract';
+  const verdict = verification?.verdict || null;
+  const screenshotStatus = verdict === 'VALID'
+    ? 'ORIGINAL / VALID'
+    : verdict === 'DUPLICATE'
+      ? 'DUPLICATE'
+      : verdict === 'ERROR'
+        ? 'ERROR'
+        : verdict === 'UNCLEAR'
+          ? 'UNCLEAR / NOT CONFIRMED'
+          : 'UNVERIFIED';
 
   let reply = `🔍 *Payment Screenshot Analysis*\n`;
   reply += `📋 Processing ID: ${processingId}\n\n`;
@@ -31,6 +41,11 @@ function formatOcrReply(ocrResult, processingId, captionEmail = null) {
   reply += `📅 Date: ${dateStr}\n`;
   reply += `👤 Name: ${name}\n`;
   reply += `✅ Status: ${status}\n\n`;
+  reply += `${screenshotStatus === 'ORIGINAL / VALID' ? '✅' : screenshotStatus === 'DUPLICATE' ? '♻️' : screenshotStatus === 'ERROR' ? '❌' : '⚠️'} Screenshot Status: ${screenshotStatus}\n`;
+  if (verification?.duplicate_of_processing_id) {
+    reply += `🔁 Original Processing ID: ${verification.duplicate_of_processing_id}\n`;
+  }
+  reply += `\n`;
 
   if (stripeTransaction.payment_time) {
     reply += `🕒 Stripe Payment Time: ${stripeTransaction.payment_time}\n\n`;
@@ -43,8 +58,11 @@ function formatOcrReply(ocrResult, processingId, captionEmail = null) {
   }
 
   if (verification) {
-    const verdict = verification.verdict || 'UNCLEAR';
-    const marker = verdict === 'VALID' ? '✅' : verdict === 'ERROR' ? '❌' : '⚠️';
+    const marker = verdict === 'VALID'
+      ? '✅'
+      : verdict === 'DUPLICATE'
+        ? '♻️'
+        : verdict === 'ERROR' ? '❌' : '⚠️';
     reply += `${marker} Stripe Verification: ${verdict}\n`;
     if (verification.reason_code) {
       reply += `🧾 Verification Reason: ${verification.reason_code}\n`;
@@ -65,6 +83,24 @@ function formatOcrReply(ocrResult, processingId, captionEmail = null) {
 }
 
 /**
+ * Formats the only text response intentionally sent by the new reaction-first
+ * contract: a duplicate explanation with enough provenance for review.
+ */
+function formatDuplicateReply(ocrResult, processingId, { groupScope = null } = {}) {
+  const verification = ocrResult?.verification || {};
+  const scope = groupScope === 'same_group' ? 'the same group' : groupScope === 'another_group' ? 'another group' : 'this WhatsApp workspace';
+  const reason = verification.reason_code || 'DUPLICATE_DETECTED';
+  const originalId = verification.duplicate_of_processing_id || 'previous processing';
+  const reasonText = reason === 'DUPLICATE_STRIPE_TRANSACTION'
+    ? 'the same Stripe transaction was already verified'
+    : reason === 'DUPLICATE_IMAGE_PHASH'
+      ? 'a visually equivalent copy of the screenshot was already processed'
+      : 'the exact screenshot image was already processed';
+
+  return `♻️ *Duplicate Screenshot*\n📋 Processing ID: ${processingId}\n\nThis screenshot was already processed in ${scope}; ${reasonText}.\n🧾 Detection reason: ${reason}\n🔁 Original Processing ID: ${originalId}\n\nNo second payment verification was recorded.`;
+}
+
+/**
  * Formats a generic error message for WhatsApp.
  * @param {string} processingId - The unique processing ID
  * @returns {string} The formatted error message
@@ -73,4 +109,4 @@ function formatErrorReply(processingId) {
   return `❌ *Error Processing Screenshot*\n📋 Processing ID: ${processingId}\n\nSorry, an error occurred while processing this image. Please try again later.`;
 }
 
-module.exports = { formatOcrReply, formatErrorReply };
+module.exports = { formatOcrReply, formatDuplicateReply, formatErrorReply };

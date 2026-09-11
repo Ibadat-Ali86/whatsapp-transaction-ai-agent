@@ -3,8 +3,10 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
 
 const { createMessageHandler } = require('../src/whatsapp/message-handler');
+const { createDuplicateStore } = require('../src/whatsapp/duplicate-store');
 
 const required = ['N8N_BASE_URL', 'N8N_WEBHOOK_TOKEN'];
 const missing = required.filter(name => !process.env[name]);
@@ -16,7 +18,7 @@ if (missing.length > 0) {
 const groupId = process.env.SMOKE_GROUP_JID || '1234567890-1234567890@g.us';
 const imagePath = path.join(__dirname, '..', 'tests', 'fixtures', 'ocr', 'synthetic_clear_01.png');
 const image = fs.readFileSync(imagePath);
-let reply = '';
+let response = null;
 
 const logger = {
   debug() {},
@@ -44,13 +46,14 @@ const message = {
 
 const sock = {
   async sendMessage(_jid, content) {
-    reply = content.text;
+    response = content;
   },
 };
 
 const handler = createMessageHandler(sock, {
   ALLOWED_GROUP_JIDS: [groupId],
   BOT_REPLY_ENABLED: true,
+  BOT_REACTIONS_ENABLED: true,
   REQUIRE_EMAIL_CAPTION: true,
   N8N_ENABLED: true,
   STRIPE_VERIFICATION_ENABLED: false,
@@ -60,18 +63,19 @@ const handler = createMessageHandler(sock, {
     mimeType: 'image/png',
     tempPath: null,
   }),
+  duplicateStore: createDuplicateStore({
+    filePath: path.join(os.tmpdir(), `wa-n8n-smoke-${process.pid}-${Date.now()}.json`),
+  }),
 });
 
 handler({ messages: [message] })
   .then(() => {
-    assert.match(reply, /testuser@example\.com/);
-    assert.match(reply, /Amount: \$25\.00/);
-    assert.match(reply, /Stripe Verification: UNCLEAR/);
-    assert.match(reply, /STRIPE_DISABLED/);
+    assert.deepEqual(response?.react?.text, '❌');
+    assert.equal(response?.react?.key?.id, message.key.id);
     console.log(JSON.stringify({
       ok: true,
-      route: 'message-handler -> n8n -> OCR -> reply',
-      processing_id_present: /Processing ID: wa-/.test(reply),
+      route: 'message-handler -> n8n -> OCR -> Stripe gate -> reaction',
+      reaction: response.react.text,
     }));
   })
   .catch(error => {

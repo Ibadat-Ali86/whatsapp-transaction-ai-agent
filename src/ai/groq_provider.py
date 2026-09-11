@@ -17,6 +17,7 @@ Return ONLY valid JSON with these exact keys (use null for missing fields):
   "email": "<email address or null>",
   "amount": "<amount string like '$25.00' or null>",
   "minutes": "<2-digit minute component of payment time, e.g. '31', or null>",
+  "payment_hour": "<24-hour local payment hour 0-23, or null>",
   "payment_date": "<date in YYYY-MM-DD format or null>",
   "customer_name": "<customer name or null>",
   "status": "<payment status text like 'Completed' or null>"

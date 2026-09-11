@@ -2,7 +2,7 @@
 
 - Version: 2
 - Date: 2026-09-10
-- Change: Optional server-side Stripe test verification after OCR
+- Change: Optional server-side Stripe read-only verification after OCR
 
 ## What changed
 
@@ -10,24 +10,21 @@ The v2 workflow keeps the authenticated webhook and OCR path from v1, then
 adds a bounded validation/idempotency layer and a gated branch:
 
 ```text
-validate -> idempotency guard -> OCR -> evidence gate -> Stripe test verifier -> response
-                                      \-> OCR-only response
+validate -> idempotency guard -> OCR -> Stripe gate -> Stripe verifier -> response
+                                      \-> OCR-only response when disabled
 ```
 
-The Stripe branch runs only when the Baileys event contains
-`stripe_verification_enabled=true` and OCR provides an amount, ISO date, and
-minute. If OCR email conflicts with the required caption email, the workflow
-returns `UNCLEAR` without calling Stripe. Missing evidence also remains
-non-approving.
+The Stripe branch runs when the Baileys event contains
+`stripe_verification_enabled=true`. The caption email is optional and is a
+preferred lookup hint. OCR amount/date/time evidence is passed to Stripe as
+bounded recovery evidence when the caption is missing, malformed, or does not
+match. Stripe supplies canonical amount, date, time, customer email, name, and
+status; recovery is approved only for one eligible charge. Ambiguous,
+insufficient, and conflicting matches remain non-approving.
 
-The normalized caption email is the required Stripe lookup identity. OCR
-amount/date/time are passed as optional constraints only when confidence is at
-least `0.85`; otherwise Stripe is queried by caption email and supplies the
-canonical transaction fields. Email conflicts and ambiguous matches remain
-non-approving.
-
-Malformed identity, caption, or image input is rejected with a structured HTTP
-`400` response before idempotency or OCR processing.
+Malformed event identity or image input is rejected with a structured HTTP
+`400` response before idempotency or OCR processing. A malformed caption is
+discarded as an identity hint and continues through OCR/Stripe recovery.
 
 ## Configure safely
 
@@ -37,10 +34,13 @@ Malformed identity, caption, or image input is rejected with a structured HTTP
 3. Create the `OCR service Stripe verifier auth` header credential with header
    name `X-Internal-Service-Token` and the same value as the Python service's
    `STRIPE_SERVICE_TOKEN`. The value is intentionally absent from this export.
-4. Configure the OCR service with `STRIPE_ENABLED=true`, `STRIPE_MODE=test`, a
-   `sk_test_` key, and the configured timezone.
-5. Set `STRIPE_VERIFICATION_ENABLED=true` in the Baileys process only for the
-   controlled test-mode workflow. Keep it false for OCR-only operation.
+4. Configure the OCR service with `STRIPE_ENABLED=true`, a mode/key pair that
+   matches (`STRIPE_MODE=test` with `sk_test_`/`rk_test_`, or explicitly
+   approved `STRIPE_MODE=live` with `sk_live_`/`rk_live_`), and the configured
+   timezone.
+5. Set `STRIPE_VERIFICATION_ENABLED=true` in the Baileys process only when
+   Stripe verification is intentionally enabled. Keep it false for OCR-only
+   operation.
 6. If n8n runs in a container, replace both `localhost:8000` URLs with the
    address reachable from that container.
 7. The workflow keeps a 24-hour `source:message_id` guard in active-workflow

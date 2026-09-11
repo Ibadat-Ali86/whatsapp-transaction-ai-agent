@@ -5,8 +5,9 @@
 Phase 2 introduces n8n as a local orchestration boundary between the Baileys
 transport and the OCR service. A gated server-side Stripe test-mode verifier
 is also available as the next integration boundary, while formal Stripe
-acceptance, duplicate detection, Google Sheets, Telegram, and production
-deployment remain later phase gates in `docs/PHASE_PLAN.md`.
+acceptance, Google Sheets, Telegram, and production deployment remain later
+phase gates in `docs/PHASE_PLAN.md`; duplicate detection is now implemented in
+the Baileys adapter.
 
 ## Required flow
 
@@ -95,12 +96,11 @@ v1 remains the rollback-safe OCR-only workflow.
 - Preserves OCR-only behavior when `STRIPE_VERIFICATION_ENABLED=false`.
 - Calls the internal verifier when the event gate and normalized caption email
   are present, even if OCR evidence is incomplete.
-- Rejects caption/OCR email conflicts without calling Stripe.
 - Uses the normalized caption email as the required Stripe lookup identity;
-  OCR amount/date/time are optional constraints and Stripe supplies canonical
-  transaction fields when OCR is incomplete.
-- Blocks caption/OCR email conflicts and ambiguous email-only matches; a
-  single eligible Stripe charge is required for `VALID`.
+  OCR amount is an optional disambiguator and Stripe supplies canonical date,
+  time, name, amount, and status fields.
+- A single eligible Stripe charge is required for `VALID`; ambiguous matches
+  remain `UNCLEAR`.
 - Applies a bounded image-payload check and a 24-hour `source:message_id`
   duplicate guard before OCR.
 - Stores the internal verifier token only in an n8n credential reference; no
@@ -109,8 +109,8 @@ v1 remains the rollback-safe OCR-only workflow.
   not retained by the workflow.
 - Returns the verifier result alongside OCR data so Baileys can display the
   audit-safe result.
-- The OCR-to-Stripe conflict branch was exercised locally and returned
-  `CAPTION_OCR_EMAIL_CONFLICT` without calling Stripe.
+- The caption-driven Stripe lookup path was exercised locally with incomplete
+  OCR evidence and returned the canonical Stripe result when available.
 
 #### Local verifier test
 

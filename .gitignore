@@ -25,6 +25,7 @@ token.json
 # ---------------------------------------------------------------------------
 auth/
 auth.backup-*/
+auth-backup-*/
 auth_info/
 auth_info_multi/
 sessions/
@@ -43,6 +44,7 @@ tmp/
 temp/
 uploads/
 images/
+data/
 *.screenshot.png
 *.screenshot.jpg
 *.screenshot.jpeg

@@ -3,7 +3,10 @@ import secrets
 import pathlib
 import base64
 import hashlib
+import io
+import math
 from datetime import datetime
+from PIL import Image
 from src.config.settings import get_settings
 from src.logging.audit import AuditLogger
 
@@ -46,6 +49,27 @@ def validate_image_bytes(image_bytes: bytes, max_size_mb: float) -> None:
 
 def compute_sha256(image_bytes: bytes) -> str:
     return hashlib.sha256(image_bytes).hexdigest()
+
+def compute_perceptual_hash(image_bytes: bytes) -> str:
+    """Return a compact 64-bit pHash for resized/recompressed image matching."""
+    with Image.open(io.BytesIO(image_bytes)) as image:
+        grayscale = image.convert("L").resize((32, 32), Image.Resampling.LANCZOS)
+        pixels = list(grayscale.getdata())
+
+    coefficients = []
+    for u in range(8):
+        for v in range(8):
+            total = 0.0
+            for x in range(32):
+                for y in range(32):
+                    total += pixels[x * 32 + y] * math.cos(((2 * x + 1) * u * math.pi) / 64) * math.cos(((2 * y + 1) * v * math.pi) / 64)
+            alpha_u = 1 / math.sqrt(2) if u == 0 else 1.0
+            alpha_v = 1 / math.sqrt(2) if v == 0 else 1.0
+            coefficients.append(total * alpha_u * alpha_v / 4)
+
+    median = sorted(coefficients[1:])[len(coefficients[1:]) // 2]
+    bits = sum((1 << index) for index, coefficient in enumerate(coefficients) if coefficient > median)
+    return f"{bits:016x}"
 
 def base64_to_bytes(b64_str: str) -> bytes:
     if not b64_str or not b64_str.strip():

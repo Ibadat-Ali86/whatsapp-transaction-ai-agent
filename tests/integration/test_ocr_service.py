@@ -7,6 +7,9 @@ Tesseract must be installed locally for these to pass.
 """
 from __future__ import annotations
 
+import asyncio
+import time
+
 import pytest
 import httpx
 from types import SimpleNamespace
@@ -40,6 +43,42 @@ class TestHealthEndpoints:
 
 
 class TestOcrProcessEndpoint:
+
+    async def test_liveness_remains_responsive_during_ocr_processing(
+        self, client, blank_white_image_base64, processing_id, monkeypatch
+    ):
+        """Synchronous OCR work must not block unrelated health requests."""
+        def slow_process(*_args):
+            time.sleep(0.15)
+            return SimpleNamespace(
+                processing_id=processing_id,
+                provider="tesseract",
+                raw_text="",
+                fields=None,
+                confidence=0.0,
+                tesseract_confidence=0.0,
+                ai_used=False,
+                processing_time_ms=150,
+                error=None,
+                fallback_reason=None,
+            )
+
+        monkeypatch.setattr(ocr_service.OCREngine, "process_image", slow_process)
+        ocr_task = asyncio.create_task(client.post("/api/v1/ocr/process", json={
+            "processing_id": processing_id,
+            "image_base64": blank_white_image_base64,
+            "mime_type": "image/png",
+            "message_id": "msg-concurrency",
+            "group_id": "group-001",
+            "sender_jid": "sender-001",
+        }))
+        await asyncio.sleep(0.02)
+
+        health_response = await client.get("/health/live")
+        ocr_response = await ocr_task
+
+        assert health_response.status_code == 200
+        assert ocr_response.status_code == 200
 
     async def test_rejects_invalid_mime_type(self, client, blank_white_image_base64, processing_id):
         response = await client.post("/api/v1/ocr/process", json={
@@ -116,7 +155,12 @@ class TestOcrProcessEndpoint:
 
 class TestStripeVerificationEndpoint:
 
-    async def test_is_disabled_by_default(self, client, processing_id):
+    async def test_is_disabled_by_default(self, client, processing_id, monkeypatch):
+        monkeypatch.setattr(
+            ocr_service,
+            "get_settings",
+            lambda: SimpleNamespace(STRIPE_ENABLED=False),
+        )
         response = await client.post("/api/v1/verification/stripe", json={
             "processing_id": processing_id,
             "email": "customer@example.com",

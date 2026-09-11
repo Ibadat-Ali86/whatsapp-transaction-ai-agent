@@ -44,11 +44,13 @@ test('n8n v2 workflow contains a gated Stripe branch without secret values', () 
   assert.equal(stripeNode.credentials.httpHeaderAuth.name, 'OCR service Stripe verifier auth');
   assert.equal(stripeNode.credentials.httpHeaderAuth.id, 'CONFIGURE_STRIPE_IN_N8N');
   const webhookNode = workflow.nodes.find(node => node.name === 'WhatsApp Webhook');
+  assert.equal(webhookNode.type, 'n8n-nodes-base.webhook');
+  assert.equal(webhookNode.typeVersion, 2);
   assert.equal(webhookNode.credentials.httpHeaderAuth.id, 'CONFIGURE_IN_N8N');
   assert.notEqual(stripeNode.credentials.httpHeaderAuth.id, webhookNode.credentials.httpHeaderAuth.id);
   assert.doesNotMatch(stripeNode.parameters.jsonBody, /image\.base64/);
   assert.match(serialized, /stripe_verification_enabled/);
-  assert.match(serialized, /CAPTION_OCR_EMAIL_CONFLICT/);
+  assert.match(serialized, /STRIPE_LOOKUP_PENDING/);
   assert.match(serialized, /maxBase64Length/);
   assert.match(serialized, /processed_messages/);
   assert.match(serialized, /OCR service Stripe verifier auth/);
@@ -66,7 +68,7 @@ test('n8n v1 rollback workflow also bounds image input and disables retention', 
   assert.equal(workflow.settings.saveDataSuccessExecution, 'none');
 });
 
-test('n8n v2 code nodes enforce caption, payload, idempotency, and Stripe gates', () => {
+test('n8n v2 code nodes validate optional captions and prepare recoverable Stripe evidence', () => {
   const workflow = loadWorkflow('whatsapp-screenshot-processor_v2_20260910.json');
   const validate = nodeByName(workflow, 'Validate Event');
   const idempotency = nodeByName(workflow, 'Idempotency Guard');
@@ -83,13 +85,18 @@ test('n8n v2 code nodes enforce caption, payload, idempotency, and Stripe gates'
   const validated = executeCodeNode(validate, baseEvent)[0].json;
   assert.equal(validated.caption_email, 'customer@example.com');
   assert.equal(validated.image.base64, 'aGVsbG8=');
-  const invalidCaption = executeCodeNode(validate, {
+  const malformedCaption = executeCodeNode(validate, {
     ...baseEvent,
     caption_email: 'not-an-email',
   })[0].json;
-  assert.equal(invalidCaption.valid, false);
-  assert.equal(invalidCaption.validation_error.reason_code, 'INVALID_CAPTION_EMAIL');
-  assert.equal(invalidCaption.image, undefined);
+  assert.equal(malformedCaption.valid, true);
+  assert.equal(malformedCaption.caption_email, null);
+  const captionless = executeCodeNode(validate, {
+    ...baseEvent,
+    caption_email: '',
+  })[0].json;
+  assert.equal(captionless.valid, true);
+  assert.equal(captionless.caption_email, null);
   const invalidImage = executeCodeNode(validate, {
     ...baseEvent,
     image: { mime_type: 'image/png', base64: 'A'.repeat(14_000_000) },
@@ -105,7 +112,7 @@ test('n8n v2 code nodes enforce caption, payload, idempotency, and Stripe gates'
   assert.equal(second.idempotency.duplicate, true);
   assert.equal(first.idempotency.key, 'whatsapp:message-001');
 
-  const conflict = executeCodeNode(prepare, {
+  const ocrEmailDiffers = executeCodeNode(prepare, {
     confidence: 1,
     fields: {
       email: 'different@example.com',
@@ -114,8 +121,8 @@ test('n8n v2 code nodes enforce caption, payload, idempotency, and Stripe gates'
       payment_date: '2026-09-09',
     },
   }, { references: { 'Validate Event': validated } })[0].json;
-  assert.equal(conflict.ready_for_stripe, false);
-  assert.equal(conflict.verification.reason_code, 'CAPTION_OCR_EMAIL_CONFLICT');
+  assert.equal(ocrEmailDiffers.ready_for_stripe, true);
+  assert.equal(ocrEmailDiffers.stripe_request.email, 'customer@example.com');
 
   const ready = executeCodeNode(prepare, {
     confidence: 1,
@@ -140,7 +147,26 @@ test('n8n v2 code nodes enforce caption, payload, idempotency, and Stripe gates'
     },
   }, { references: { 'Validate Event': validated } })[0].json;
   assert.equal(lowConfidence.ready_for_stripe, true);
-  assert.equal(lowConfidence.verification.reason_code, 'EMAIL_LOOKUP_WITHOUT_OCR_EVIDENCE');
-  assert.equal(lowConfidence.stripe_request.amount_cents, null);
-  assert.equal(lowConfidence.stripe_request.payment_date, null);
+  assert.equal(lowConfidence.verification.reason_code, 'STRIPE_LOOKUP_PENDING');
+  assert.equal(lowConfidence.stripe_request.amount_cents, 2500);
+  assert.equal(lowConfidence.stripe_request.payment_date, '2026-09-09');
+  assert.equal(lowConfidence.stripe_request.minutes, 31);
+  assert.equal(lowConfidence.stripe_request.payment_hour, null);
+
+  const emailOnly = executeCodeNode(prepare, {
+    confidence: 0,
+    fields: {},
+  }, { references: { 'Validate Event': validated } })[0].json;
+  assert.equal(emailOnly.ready_for_stripe, true);
+  assert.equal(emailOnly.stripe_request.email, 'customer@example.com');
+  assert.equal(emailOnly.stripe_request.amount_cents, null);
+
+  const noEmail = executeCodeNode(prepare, {
+    confidence: 0.55,
+    fields: { amount_cents: 2000, minutes: '23', payment_hour: 14 },
+  }, { references: { 'Validate Event': captionless } })[0].json;
+  assert.equal(noEmail.stripe_request.email, null);
+  assert.equal(noEmail.stripe_request.amount_cents, 2000);
+  assert.equal(noEmail.stripe_request.minutes, 23);
+  assert.equal(noEmail.stripe_request.payment_hour, 14);
 });

@@ -1,7 +1,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const os = require('os');
+const path = require('path');
 process.env.WHATSAPP_ALLOWED_GROUP_JIDS ||= '1234567890-1234567890@g.us';
 const { createMessageHandler } = require('../../../src/whatsapp/message-handler');
+const { createDuplicateStore } = require('../../../src/whatsapp/duplicate-store');
 
 const logger = {
   debug() {},
@@ -9,6 +12,10 @@ const logger = {
   warn() {},
   error() {},
 };
+
+function duplicateStore() {
+  return createDuplicateStore({ filePath: path.join(os.tmpdir(), `wa-duplicate-test-${process.pid}-${Math.random()}.json`) });
+}
 
 function imageMessage(remoteJid) {
   return {
@@ -67,37 +74,57 @@ test('does not process an image from a direct chat', async () => {
   assert.equal(sendMessageCalled, false);
 });
 
-test('requires a valid email caption before processing an allowlisted image', async () => {
-  let sendMessageCalled = false;
-  const sock = { sendMessage: async () => { sendMessageCalled = true; } };
+test('processes a captionless image so Stripe can recover identity from OCR evidence', async () => {
+  const events = [];
+  const sock = { sendMessage: async (_jid, content) => events.push(content) };
   const handler = createMessageHandler(sock, {
     ALLOWED_GROUP_JIDS: ['1234567890-1234567890@g.us'],
     BOT_REPLY_ENABLED: true,
-    REQUIRE_EMAIL_CAPTION: true,
-  }, logger);
+    BOT_REACTIONS_ENABLED: true,
+    N8N_ENABLED: false,
+  }, logger, {
+    duplicateStore: duplicateStore(),
+    downloadImage: async () => ({ imageBytes: Buffer.from('captionless-image'), mimeType: 'image/png', tempPath: null }),
+    processImageOCR: async params => {
+      assert.equal(params.captionEmail, null);
+      return {
+        fields: { amount_cents: 2000, minutes: '23', payment_hour: 14 },
+        confidence: 0.55,
+        provider: 'tesseract',
+        verification: { verdict: 'VALID', stripe_charge_id: 'ch-captionless' },
+      };
+    },
+  });
 
   await handler({ messages: [imageMessage('1234567890-1234567890@g.us')] });
 
-  assert.equal(sendMessageCalled, true);
+  assert.deepEqual(events, [{ react: { text: '✅', key: imageMessage('1234567890-1234567890@g.us').key } }]);
 });
 
 test('sends a captioned image through OCR once per message ID', async () => {
   let ocrCalls = 0;
   let reply;
   const sock = {
-    sendMessage: async (_jid, content) => { reply = content.text; },
+    sendMessage: async (_jid, content) => { reply = content; },
   };
   const handler = createMessageHandler(sock, {
     ALLOWED_GROUP_JIDS: ['1234567890-1234567890@g.us'],
     BOT_REPLY_ENABLED: true,
+    BOT_REACTIONS_ENABLED: true,
     REQUIRE_EMAIL_CAPTION: true,
     N8N_ENABLED: false,
   }, logger, {
     downloadImage: async () => ({ imageBytes: Buffer.from('synthetic-image'), mimeType: 'image/png', tempPath: null }),
+    duplicateStore: duplicateStore(),
     processImageOCR: async params => {
       ocrCalls += 1;
       assert.equal(params.captionEmail, 'customer@example.com');
-      return { fields: { email: 'customer@example.com', amount_cents: 1000 }, confidence: 0.7, provider: 'tesseract' };
+      return {
+        fields: { email: 'customer@example.com', amount_cents: 1000 },
+        confidence: 0.7,
+        provider: 'tesseract',
+        verification: { verdict: 'VALID', stripe_charge_id: 'ch-original-test' },
+      };
     },
   });
 
@@ -105,7 +132,7 @@ test('sends a captioned image through OCR once per message ID', async () => {
   await handler({ messages: [message, message] });
 
   assert.equal(ocrCalls, 1);
-  assert.match(reply, /customer@example.com/);
+  assert.deepEqual(reply.react, { text: '✅', key: message.key });
 });
 
 test('routes a captioned image through n8n when enabled', async () => {
@@ -119,6 +146,7 @@ test('routes a captioned image through n8n when enabled', async () => {
     STRIPE_VERIFICATION_ENABLED: true,
   }, logger, {
     downloadImage: async () => ({ imageBytes: Buffer.from('synthetic-image'), mimeType: 'image/png', tempPath: null }),
+    duplicateStore: duplicateStore(),
     processImageViaN8n: async payload => {
       workflowPayload = payload;
       return { fields: { email: payload.caption_email }, confidence: 1, provider: 'tesseract' };
@@ -131,4 +159,76 @@ test('routes a captioned image through n8n when enabled', async () => {
   assert.equal(workflowPayload.caption_email, 'customer@example.com');
   assert.equal(workflowPayload.stripe_verification_enabled, true);
   assert.equal(workflowPayload.image.mime_type, 'image/png');
+});
+
+test('marks an exact screenshot resend as a duplicate across groups', async () => {
+  const replies = [];
+  const sock = { sendMessage: async (_jid, content) => replies.push(content) };
+  const store = duplicateStore();
+  const handler = createMessageHandler(sock, {
+    ALLOWED_GROUP_JIDS: [
+      '1234567890-1234567890@g.us',
+      '1234567890-9876543210@g.us',
+    ],
+    BOT_REPLY_ENABLED: true,
+    BOT_REACTIONS_ENABLED: true,
+    REQUIRE_EMAIL_CAPTION: true,
+    N8N_ENABLED: false,
+  }, logger, {
+    duplicateStore: store,
+    downloadImage: async () => ({ imageBytes: Buffer.from('same-image'), mimeType: 'image/png', tempPath: null }),
+    processImageOCR: async params => ({
+      fields: { email: params.captionEmail, amount_cents: 2000 },
+      confidence: 1,
+      provider: 'tesseract',
+      verification: { verdict: 'VALID', stripe_charge_id: 'ch-image-test' },
+    }),
+  });
+
+  await handler({ messages: [captionedImageMessage('1234567890-1234567890@g.us', 'first-message')] });
+  await handler({ messages: [captionedImageMessage('1234567890-9876543210@g.us', 'second-message')] });
+
+  assert.deepEqual(replies[0].react, { text: '✅', key: captionedImageMessage('1234567890-1234567890@g.us', 'first-message').key });
+  assert.match(replies[1].text, /Duplicate Screenshot/);
+  assert.match(replies[1].text, /DUPLICATE_IMAGE_SHA256/);
+  assert.match(replies[1].text, /another group/);
+  assert.match(replies[1].text, /Original Processing ID: wa-/);
+});
+
+test('marks a repeated Stripe charge as a transaction duplicate', async () => {
+  const replies = [];
+  const sock = { sendMessage: async (_jid, content) => replies.push(content) };
+  const store = duplicateStore();
+  const handler = createMessageHandler(sock, {
+    ALLOWED_GROUP_JIDS: [
+      '1234567890-1234567890@g.us',
+      '1234567890-9876543210@g.us',
+    ],
+    BOT_REPLY_ENABLED: true,
+    BOT_REACTIONS_ENABLED: true,
+    REQUIRE_EMAIL_CAPTION: true,
+    N8N_ENABLED: true,
+    STRIPE_VERIFICATION_ENABLED: true,
+  }, logger, {
+    duplicateStore: store,
+    downloadImage: async () => ({ imageBytes: Buffer.from(`image-${replies.length}`), mimeType: 'image/png', tempPath: null }),
+    processImageViaN8n: async payload => ({
+      fields: { email: payload.caption_email, amount_cents: 2000 },
+      confidence: 1,
+      provider: 'tesseract',
+      verification: {
+        status: 'MATCHED',
+        verdict: 'VALID',
+        reason_code: 'EXACT_SINGLE_MATCH',
+        stripe_charge_id: 'ch_same_transaction',
+      },
+    }),
+  });
+
+  await handler({ messages: [captionedImageMessage('1234567890-1234567890@g.us', 'transaction-one')] });
+  await handler({ messages: [captionedImageMessage('1234567890-9876543210@g.us', 'transaction-two')] });
+
+  assert.deepEqual(replies[0].react, { text: '✅', key: captionedImageMessage('1234567890-1234567890@g.us', 'transaction-one').key });
+  assert.match(replies[1].text, /Duplicate Screenshot/);
+  assert.match(replies[1].text, /DUPLICATE_STRIPE_TRANSACTION/);
 });

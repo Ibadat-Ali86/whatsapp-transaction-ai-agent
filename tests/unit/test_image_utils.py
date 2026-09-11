@@ -90,6 +90,18 @@ class TestSha256:
         assert compute_sha256(blank_white_image_bytes) == expected
 
 
+class TestPerceptualHash:
+
+    def test_hash_is_compact_hex(self, blank_white_image_bytes):
+        from src.utils.image_utils import compute_perceptual_hash
+        result = compute_perceptual_hash(blank_white_image_bytes)
+        assert re.fullmatch(r"[0-9a-f]{16}", result)
+
+    def test_same_image_is_stable(self, blank_white_image_bytes):
+        from src.utils.image_utils import compute_perceptual_hash
+        assert compute_perceptual_hash(blank_white_image_bytes) == compute_perceptual_hash(blank_white_image_bytes)
+
+
 # ===========================================================================
 # Image validation — magic bytes and size
 # ===========================================================================

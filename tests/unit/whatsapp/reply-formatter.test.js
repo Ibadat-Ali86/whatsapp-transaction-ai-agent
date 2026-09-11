@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { formatOcrReply } = require('../../../src/whatsapp/reply-formatter');
+const { formatOcrReply, formatDuplicateReply } = require('../../../src/whatsapp/reply-formatter');
 
 test('formats the OCR service fields response shape', () => {
   const reply = formatOcrReply({
@@ -73,6 +73,27 @@ test('formats the server-side Stripe verification result', () => {
   assert.match(reply, /Stripe Verification: VALID/);
   assert.match(reply, /Verification Reason: EXACT_SINGLE_MATCH/);
   assert.match(reply, /Stripe Charge: ch_test_123/);
+  assert.match(reply, /Screenshot Status: ORIGINAL \/ VALID/);
+});
+
+test('formats duplicate and unclear screenshot statuses safely', () => {
+  const duplicate = formatOcrReply({
+    fields: { email: 'customer@example.com' },
+    verification: {
+      verdict: 'DUPLICATE',
+      reason_code: 'DUPLICATE_STRIPE_TRANSACTION',
+      duplicate_of_processing_id: 'wa-original',
+    },
+  }, 'wa-duplicate', 'customer@example.com');
+  assert.match(duplicate, /Screenshot Status: DUPLICATE/);
+  assert.match(duplicate, /Original Processing ID: wa-original/);
+  assert.match(duplicate, /Stripe Verification: DUPLICATE/);
+
+  const unclear = formatOcrReply({
+    fields: { email: 'customer@example.com' },
+    verification: { verdict: 'UNCLEAR', reason_code: 'NO_EXACT_MATCH' },
+  }, 'wa-unclear', 'customer@example.com');
+  assert.match(unclear, /Screenshot Status: UNCLEAR \/ NOT CONFIRMED/);
 });
 
 test('makes local OCR fallback visible without exposing provider details', () => {
@@ -86,4 +107,19 @@ test('makes local OCR fallback visible without exposing provider details', () =>
   assert.match(reply, /AI enhancement unavailable/);
   assert.match(reply, /local OCR/);
   assert.doesNotMatch(reply, /API key|429|Groq/);
+});
+
+test('formats a concise duplicate justification with group scope', () => {
+  const reply = formatDuplicateReply({
+    verification: {
+      reason_code: 'DUPLICATE_IMAGE_SHA256',
+      duplicate_of_processing_id: 'wa-original',
+    },
+  }, 'wa-duplicate', { groupScope: 'another_group' });
+
+  assert.match(reply, /Duplicate Screenshot/);
+  assert.match(reply, /another group/);
+  assert.match(reply, /DUPLICATE_IMAGE_SHA256/);
+  assert.match(reply, /Original Processing ID: wa-original/);
+  assert.doesNotMatch(reply, /Stripe Verification/);
 });

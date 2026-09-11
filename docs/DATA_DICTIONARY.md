@@ -38,6 +38,10 @@ Integer monetary amount in cents.
 minutes
 Two-digit minute component where available.
 
+payment_hour
+24-hour local payment hour where available. Used with amount/minutes only as
+bounded recovery evidence when the caption email is missing or not matched.
+
 payment_date
 Normalized date when available.
 
@@ -55,8 +59,9 @@ Numeric diagnostic score.
 
 fallback_reason
 Safe reason when OCR returned a local Tesseract result because the optional
-cloud AI provider was unavailable. Low-confidence OCR fields are not sent as
-Stripe constraints; Stripe may still perform the separate caption-email lookup.
+cloud AI provider was unavailable. Low-confidence OCR fields are not payment
+proof. Stripe may still use deterministic amount/date/time evidence for a
+bounded, uniquely matched recovery lookup.
 
 ## Verification fields
 
@@ -65,6 +70,12 @@ Boolean/image duplicate result.
 
 duplicate_transaction
 Boolean transaction duplicate result.
+
+duplicate_match_type
+SHA256, PHASH, or STRIPE_TRANSACTION duplicate detection source.
+
+duplicate_of_processing_id
+Processing ID of the first accepted occurrence when a duplicate is detected.
 
 stripe_charge_id
 Matching Stripe charge ID.

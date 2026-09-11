@@ -18,6 +18,7 @@ const config = {
   N8N_WEBHOOK_PATH: process.env.N8N_WEBHOOK_PATH || '/webhook/whatsapp-screenshot',
   N8N_WEBHOOK_URL: process.env.N8N_WEBHOOK_URL || '',
   N8N_WEBHOOK_TOKEN: process.env.N8N_WEBHOOK_TOKEN || '',
+  N8N_HEALTH_TIMEOUT_MS: parseInteger(process.env.N8N_HEALTH_TIMEOUT_MS, 5000),
   N8N_TIMEOUT_MS: parseInteger(process.env.N8N_TIMEOUT_MS, 60000),
   N8N_RETRY_ATTEMPTS: parseInteger(process.env.N8N_RETRY_ATTEMPTS, 2),
   STRIPE_VERIFICATION_ENABLED: process.env.STRIPE_VERIFICATION_ENABLED === 'true',
@@ -28,9 +29,13 @@ const config = {
   AUTH_DIR: process.env.AUTH_DIR || 'auth',
   RESET_GROUP_SENDER_KEYS_ON_START: process.env.RESET_GROUP_SENDER_KEYS_ON_START !== 'false',
   TEMP_DIR: process.env.TEMP_DIR || 'tmp',
+  DUPLICATE_STORE_PATH: process.env.DUPLICATE_STORE_PATH || 'data/duplicate-store.json',
+  DUPLICATE_RETENTION_DAYS: parseInteger(process.env.DUPLICATE_RETENTION_DAYS, 90),
+  DUPLICATE_PHASH_MAX_DISTANCE: parseInteger(process.env.DUPLICATE_PHASH_MAX_DISTANCE, 6),
   OCR_TIMEOUT_MS: parseInteger(process.env.OCR_TIMEOUT_MS, 60000),
   MAX_IMAGE_SIZE_MB: parseInteger(process.env.MAX_IMAGE_SIZE_MB, 10),
   BOT_REPLY_ENABLED: process.env.BOT_REPLY_ENABLED !== 'false',
+  BOT_REACTIONS_ENABLED: process.env.BOT_REACTIONS_ENABLED !== 'false',
 };
 
 if (!config.ALLOWED_GROUP_JIDS.length) {

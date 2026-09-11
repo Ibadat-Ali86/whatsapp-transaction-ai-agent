@@ -12,7 +12,7 @@
       "id": "f0c8b9d0-5bdf-4e74-b19f-4f75f0b0b001",
       "name": "WhatsApp Webhook",
       "type": "n8n-nodes-base.webhook",
-      "typeVersion": 2.1,
+      "typeVersion": 2,
       "position": [240, 300],
       "webhookId": "whatsapp-screenshot-v1",
       "credentials": {
