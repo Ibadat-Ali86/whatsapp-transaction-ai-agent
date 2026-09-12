@@ -118,6 +118,13 @@ class TestMinutesExtraction:
         assert fields.payment_hour == 14
         assert fields.minutes == "23"
 
+    def test_ignores_unlabelled_chat_timestamp_after_receipt_details(self):
+        fields = FieldExtractor.extract_from_text(
+            "Payment date Fri, Aug 14 Completed 11:20 AM", "test-pid-026"
+        )
+        assert fields.payment_hour is None
+        assert fields.minutes is None
+
 
 # ===========================================================================
 # Date extraction
@@ -139,6 +146,12 @@ class TestDateExtraction:
         text = "Date: 2026-12-31"
         fields = FieldExtractor.extract_from_text(text, "test-pid-032")
         assert fields.payment_date == "2026-12-31"
+
+    def test_extracts_month_and_day_from_receipt_date(self):
+        fields = FieldExtractor.extract_from_text("Payment date Fri, Aug 14", "test-pid-033")
+        assert fields.payment_date is None
+        assert fields.payment_month == 8
+        assert fields.payment_day == 14
 
 
 # ===========================================================================
@@ -222,7 +235,10 @@ class TestAIResponseParsing:
             "email": "user@example.com",
             "amount": "$25.00",
             "minutes": "31",
+            "payment_hour": "9",
             "payment_date": "2026-09-09",
+            "payment_month": "8",
+            "payment_day": "14",
             "customer_name": "Test User",
             "status": "Completed",
         }
@@ -231,7 +247,10 @@ class TestAIResponseParsing:
         assert fields.amount_cents == 2500
         assert isinstance(fields.amount_cents, int)
         assert fields.minutes == "31"
+        assert fields.payment_hour == 9
         assert fields.payment_date == "2026-09-09"
+        assert fields.payment_month == 8
+        assert fields.payment_day == 14
         assert fields.status == "Completed"
 
     def test_parses_null_ai_fields(self):

@@ -91,14 +91,25 @@ test('processes a captionless image so Stripe can recover identity from OCR evid
         fields: { amount_cents: 2000, minutes: '23', payment_hour: 14 },
         confidence: 0.55,
         provider: 'tesseract',
-        verification: { verdict: 'VALID', stripe_charge_id: 'ch-captionless' },
+        verification: {
+          verdict: 'VALID',
+          stripe_charge_id: 'ch-captionless',
+          matched_transaction: {
+            customer_email: 'recovered@example.com',
+            amount_cents: 2000,
+            status: 'Completed',
+          },
+        },
       };
     },
   });
 
   await handler({ messages: [imageMessage('1234567890-1234567890@g.us')] });
 
-  assert.deepEqual(events, [{ react: { text: '✅', key: imageMessage('1234567890-1234567890@g.us').key } }]);
+  assert.equal(events.length, 2);
+  assert.match(events[0].text, /Email: recovered@example\.com/);
+  assert.match(events[0].text, /Stripe Verification: VALID/);
+  assert.deepEqual(events[1], { react: { text: '✅', key: imageMessage('1234567890-1234567890@g.us').key } });
 });
 
 test('sends a captioned image through OCR once per message ID', async () => {

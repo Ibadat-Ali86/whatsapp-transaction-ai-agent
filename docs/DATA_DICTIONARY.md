@@ -36,14 +36,25 @@ amount_cents
 Integer monetary amount in cents.
 
 minutes
-Two-digit minute component where available.
+Two-digit minute component from a context-associated payment time. Unlabelled
+chat/message timestamps are ignored rather than treated as payment evidence.
 
 payment_hour
-24-hour local payment hour where available. Used with amount/minutes only as
-bounded recovery evidence when the caption email is missing or not matched.
+24-hour receipt-clock payment hour where available. Used as a hard recovery
+constraint only when `STRIPE_SCREENSHOT_TIMEZONE` is configured; otherwise it
+is diagnostic because group members may use different local time zones.
+
+payment_month
+Numeric receipt month when the screenshot shows a textual month/day date such
+as `Aug 14`. Used with `payment_day` as one partial-date recovery constraint.
+
+payment_day
+Numeric receipt day when the screenshot shows a textual month/day date. It is
+never treated as a standalone date; month and day must be present together.
 
 payment_date
-Normalized date when available.
+Normalized ISO date when available. A partial textual date is represented by
+`payment_month` and `payment_day` instead.
 
 customer_name
 Customer name when available.

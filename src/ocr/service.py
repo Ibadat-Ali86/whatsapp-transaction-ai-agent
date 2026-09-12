@@ -42,6 +42,8 @@ class StripeVerificationRequest(BaseModel):
     payment_date: Optional[date] = None
     minutes: Optional[int] = Field(default=None, ge=0, le=59)
     payment_hour: Optional[int] = Field(default=None, ge=0, le=23)
+    payment_month: Optional[int] = Field(default=None, ge=1, le=12)
+    payment_day: Optional[int] = Field(default=None, ge=1, le=31)
     currency: str = Field(default="usd", min_length=3, max_length=3)
     payment_method_type: str = Field(default="cashapp", min_length=1, max_length=32)
 
@@ -131,6 +133,8 @@ async def process_ocr(request: OCRRequest):
             "minutes": result.fields.minutes,
             "payment_hour": result.fields.payment_hour,
             "payment_date": result.fields.payment_date,
+            "payment_month": result.fields.payment_month,
+            "payment_day": result.fields.payment_day,
             "customer_name": result.fields.customer_name,
             "status": result.fields.status,
             "extraction_warnings": result.fields.extraction_warnings
@@ -175,6 +179,7 @@ async def verify_stripe(
         api_version=settings.STRIPE_API_VERSION,
         timeout_seconds=settings.STRIPE_TIMEOUT_SECONDS,
         timezone_name=settings.STRIPE_TIMEZONE,
+        screenshot_timezone=settings.STRIPE_SCREENSHOT_TIMEZONE,
         max_pages=settings.STRIPE_MAX_PAGES,
         lookback_days=settings.STRIPE_LOOKBACK_DAYS,
         allowed_payment_method_type=settings.STRIPE_ALLOWED_PAYMENT_METHOD_TYPE,
@@ -185,6 +190,8 @@ async def verify_stripe(
         payment_date=request.payment_date,
         minutes=request.minutes,
         payment_hour=request.payment_hour,
+        payment_month=request.payment_month,
+        payment_day=request.payment_day,
         currency=request.currency,
         payment_method_type=request.payment_method_type,
     )

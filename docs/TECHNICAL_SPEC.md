@@ -96,11 +96,12 @@ Incoming image event:
   }
 }
 
-The WhatsApp intake layer requires every payment screenshot to carry a
-single syntactically valid customer email as its image caption. The caption
-is normalized to lowercase and is the trusted lookup hint for later
-verification; OCR email text remains evidence that must be compared, not
-blindly trusted.
+The WhatsApp intake layer accepts a missing or malformed caption as a
+recoverable condition. A syntactically valid caption is normalized to
+lowercase and used as a lookup hint; OCR email text remains evidence that must
+be compared, not blindly trusted. Without a usable email, Stripe recovery is
+approved only when deterministic evidence identifies exactly one eligible
+charge.
 
 OCR result:
 
@@ -112,6 +113,8 @@ OCR result:
     "amount": null,
     "minutes": null,
     "payment_date": null,
+    "payment_month": null,
+    "payment_day": null,
     "customer_name": null,
     "status": null
   },
@@ -135,18 +138,23 @@ Stripe verification request:
   "payment_date": "2026-09-09",
   "minutes": 31,
   "payment_hour": 14,
+  "payment_month": null,
+  "payment_day": null,
   "currency": "usd",
   "payment_method_type": "cashapp"
 }
 
-`amount_cents`, `payment_date`, `minutes`, and `payment_hour` are optional.
-The normalized caption email is the lookup identity. When OCR evidence is
-missing or below the confidence threshold, the verifier searches the matching
-Stripe customer charges and returns the canonical amount, date, time, name,
-and status only when exactly one eligible charge matches. Multiple matches,
-email conflicts, and API failures remain non-approving outcomes. The endpoint
-requires an internal service token and Stripe keys are never accepted from
-request payloads.
+`amount_cents`, `payment_date`, `payment_month`, `payment_day`, `minutes`, and
+`payment_hour` are optional. `payment_month` and `payment_day` together
+represent a receipt date such as `Aug 14`. The normalized caption email is a
+lookup hint, not proof. When it is missing or does not match, the verifier
+requires at least two independently enforceable deterministic constraints and
+exactly one eligible charge. If no receipt timezone is configured,
+`payment_hour` is not a hard filter because sender and Stripe clocks may differ;
+minute/date/amount constraints remain enforced. Multiple matches, conflicts,
+and API failures remain non-approving outcomes. The endpoint requires an
+internal service token and Stripe keys are never accepted from request
+payloads.
 
 ## Financial data rules
 

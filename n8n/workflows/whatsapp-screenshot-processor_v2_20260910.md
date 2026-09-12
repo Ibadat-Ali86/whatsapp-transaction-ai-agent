@@ -18,9 +18,17 @@ The Stripe branch runs when the Baileys event contains
 `stripe_verification_enabled=true`. The caption email is optional and is a
 preferred lookup hint. OCR amount/date/time evidence is passed to Stripe as
 bounded recovery evidence when the caption is missing, malformed, or does not
-match. Stripe supplies canonical amount, date, time, customer email, name, and
-status; recovery is approved only for one eligible charge. Ambiguous,
-insufficient, and conflicting matches remain non-approving.
+match. Textual dates such as `Aug 14` become a month/day constraint. Stripe
+supplies canonical amount, date, time, customer email, name, and status;
+recovery is approved only for one eligible charge. Ambiguous, insufficient,
+and conflicting matches remain non-approving.
+
+For groups that may contain receipts from different time zones, leave
+`STRIPE_SCREENSHOT_TIMEZONE` empty. The verifier then ignores the screenshot
+hour as a hard constraint while retaining amount, date/month-day, and minute
+filters. Set it to an IANA timezone such as `America/Chicago` only when every
+receipt uses that clock. The canonical response time continues to use
+`STRIPE_TIMEZONE`.
 
 Malformed event identity or image input is rejected with a structured HTTP
 `400` response before idempotency or OCR processing. A malformed caption is
@@ -37,7 +45,8 @@ discarded as an identity hint and continues through OCR/Stripe recovery.
 4. Configure the OCR service with `STRIPE_ENABLED=true`, a mode/key pair that
    matches (`STRIPE_MODE=test` with `sk_test_`/`rk_test_`, or explicitly
    approved `STRIPE_MODE=live` with `sk_live_`/`rk_live_`), and the configured
-   timezone.
+   timezone. Leave `STRIPE_SCREENSHOT_TIMEZONE` empty for multi-timezone groups,
+   or set it to the known receipt timezone for stricter hour matching.
 5. Set `STRIPE_VERIFICATION_ENABLED=true` in the Baileys process only when
    Stripe verification is intentionally enabled. Keep it false for OCR-only
    operation.

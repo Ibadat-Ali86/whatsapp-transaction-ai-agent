@@ -34,6 +34,8 @@ class PaymentEvidence:
     payment_date: Optional[date] = None
     minutes: Optional[int] = None
     payment_hour: Optional[int] = None
+    payment_month: Optional[int] = None
+    payment_day: Optional[int] = None
     currency: str = "usd"
     payment_method_type: str = "cashapp"
 
@@ -115,6 +117,7 @@ class StripeVerifier:
         api_version: str = "",
         timeout_seconds: float = 15.0,
         timezone_name: str = "UTC",
+        screenshot_timezone: str = "",
         max_pages: int = 10,
         lookback_days: int = 90,
         allowed_payment_method_type: str = "cashapp",
@@ -127,6 +130,7 @@ class StripeVerifier:
         self.api_version = api_version
         self.timeout_seconds = timeout_seconds
         self.timezone_name = timezone_name
+        self.screenshot_timezone = screenshot_timezone.strip()
         self.max_pages = max_pages
         self.lookback_days = lookback_days
         self.allowed_payment_method_type = allowed_payment_method_type.casefold()
@@ -324,6 +328,7 @@ class StripeVerifier:
         *,
         require_identity: bool,
         include_time_constraints: bool,
+        match_hour: bool = True,
     ) -> bool:
         if require_identity:
             charge_email = self._charge_email(charge)
@@ -355,9 +360,13 @@ class StripeVerifier:
                 return False
             if evidence.payment_date is not None and local_created.date() != evidence.payment_date:
                 return False
+            if evidence.payment_month is not None and local_created.month != evidence.payment_month:
+                return False
+            if evidence.payment_day is not None and local_created.day != evidence.payment_day:
+                return False
             if evidence.minutes is not None and local_created.minute != evidence.minutes:
                 return False
-            if evidence.payment_hour is not None and local_created.hour != evidence.payment_hour:
+            if match_hour and evidence.payment_hour is not None and local_created.hour != evidence.payment_hour:
                 return False
         return True
 
@@ -392,6 +401,26 @@ class StripeVerifier:
             "payment_method_type": payment_method_type,
         }
 
+    def _evidence_constraint_count(self, evidence: PaymentEvidence) -> int:
+        """Count independently enforceable recovery constraints.
+
+        A partial month/day date is one constraint, not two. Screenshot hours
+        are only enforceable when the receipt timezone is explicitly known;
+        otherwise counting the hour could turn an ignored, timezone-sensitive
+        field into a false confidence signal.
+        """
+        date_constraint = evidence.payment_date is not None or (
+            evidence.payment_month is not None and evidence.payment_day is not None
+        )
+        return sum(
+            (
+                evidence.amount_cents is not None,
+                date_constraint,
+                evidence.minutes is not None,
+                bool(self.screenshot_timezone) and evidence.payment_hour is not None,
+            )
+        )
+
     async def verify(self, evidence: PaymentEvidence, processing_id: str) -> StripeVerificationResult:
         try:
             normalized_email = None
@@ -414,10 +443,7 @@ class StripeVerifier:
             return result
 
         email_hash = _email_hash(evidence.email)
-        evidence_constraint_count = sum(
-            value is not None
-            for value in (evidence.amount_cents, evidence.payment_date, evidence.minutes, evidence.payment_hour)
-        )
+        evidence_constraint_count = self._evidence_constraint_count(evidence)
         if not evidence.email and evidence_constraint_count < 2:
             result = StripeVerificationResult(
                 processing_id,
@@ -430,13 +456,15 @@ class StripeVerifier:
             return result
         try:
             self._validate_configuration()
+            try:
+                zone = ZoneInfo(self.timezone_name)
+                screenshot_zone = ZoneInfo(self.screenshot_timezone) if self.screenshot_timezone else None
+            except ZoneInfoNotFoundError as exc:
+                raise ValueError("invalid Stripe timezone configuration") from exc
             if evidence.payment_date is not None:
-                start_timestamp, end_timestamp, zone = _local_day_bounds(evidence.payment_date, self.timezone_name)
+                query_timezone = self.screenshot_timezone or self.timezone_name
+                start_timestamp, end_timestamp, _ = _local_day_bounds(evidence.payment_date, query_timezone)
             else:
-                try:
-                    zone = ZoneInfo(self.timezone_name)
-                except ZoneInfoNotFoundError as exc:
-                    raise ValueError("invalid Stripe timezone configuration") from exc
                 start_timestamp = end_timestamp = 0
         except (StripeVerificationError, TypeError, ValueError) as exc:
             reason_code = exc.reason_code if isinstance(exc, StripeVerificationError) else str(exc)
@@ -460,9 +488,10 @@ class StripeVerifier:
                     charge,
                     evidence,
                     customer_ids,
-                    zone,
+                    screenshot_zone or zone,
                     require_identity=bool(evidence.email),
                     include_time_constraints=not bool(evidence.email),
+                    match_hour=bool(self.screenshot_timezone),
                 )
             ]
 
@@ -479,7 +508,7 @@ class StripeVerifier:
                         charge,
                         evidence,
                         customer_ids,
-                        zone,
+                        screenshot_zone or zone,
                         require_identity=True,
                         include_time_constraints=False,
                     )
@@ -498,9 +527,10 @@ class StripeVerifier:
                         charge,
                         evidence,
                         customer_ids,
-                        zone,
+                        screenshot_zone or zone,
                         require_identity=False,
                         include_time_constraints=True,
+                        match_hour=bool(self.screenshot_timezone),
                     )
                 ]
                 if len(recovery_matches) == 1:
@@ -526,10 +556,7 @@ class StripeVerifier:
                         matched_transaction["customer_email"] = await self._customer_email(client, customer_id)
                     if not matched_transaction.get("customer_email") and evidence.email:
                         matched_transaction["customer_email"] = evidence.email
-                has_ocr_constraints = any(
-                    value is not None
-                    for value in (evidence.amount_cents, evidence.payment_date, evidence.minutes, evidence.payment_hour)
-                )
+                has_ocr_constraints = evidence_constraint_count > 0
                 result = StripeVerificationResult(
                     processing_id,
                     "MATCHED",

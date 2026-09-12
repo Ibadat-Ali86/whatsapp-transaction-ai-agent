@@ -25,7 +25,8 @@ WhatsApp image + email caption
 ## Security and reliability requirements
 
 - Accept messages only from the configured WhatsApp group allowlist.
-- Require a single syntactically valid email image caption.
+- Accept a missing/malformed caption as recoverable input; use a valid caption
+  as a lookup hint rather than payment proof.
 - Authenticate the webhook with a secret header; never export the value.
 - Bound webhook timeouts and retry only network/5xx/429 failures.
 - Use `source + message_id` as the idempotency key.
@@ -94,11 +95,17 @@ v1 remains the rollback-safe OCR-only workflow.
 
 - Added `whatsapp-screenshot-processor_v2_20260910.json`.
 - Preserves OCR-only behavior when `STRIPE_VERIFICATION_ENABLED=false`.
-- Calls the internal verifier when the event gate and normalized caption email
-  are present, even if OCR evidence is incomplete.
-- Uses the normalized caption email as the required Stripe lookup identity;
-  OCR amount is an optional disambiguator and Stripe supplies canonical date,
-  time, name, amount, and status fields.
+- Calls the internal verifier when the event gate is enabled, even when the
+  caption email is missing and OCR evidence is incomplete.
+- Uses the normalized caption email as a preferred lookup hint. When it is
+  missing, malformed, stale, or wrong, recovery uses OCR amount/date/time
+  evidence and Stripe supplies canonical date, time, name, email, amount, and
+  status fields.
+- Textual dates such as `Aug 14` are carried as `payment_month` plus
+  `payment_day`. Recovery requires at least two independently enforceable
+  constraints and exactly one eligible charge. An empty
+  `STRIPE_SCREENSHOT_TIMEZONE` makes screenshot hour diagnostic only, which is
+  safer for groups containing senders in different time zones.
 - A single eligible Stripe charge is required for `VALID`; ambiguous matches
   remain `UNCLEAR`.
 - Applies a bounded image-payload check and a 24-hour `source:message_id`
@@ -143,7 +150,8 @@ disabled outside this controlled test.
 
 ### Step 3 — Failure and recovery acceptance (partially implemented)
 
-- Invalid/missing caption returns a structured `400` validation error.
+- Invalid event identity/image input returns a structured `400`; missing or
+  malformed captions continue to OCR/Stripe recovery.
 - Invalid token is rejected before OCR.
 - Duplicate message IDs do not re-run OCR.
 - Caption/OCR email conflict is non-approving and does not call Stripe.

@@ -1,7 +1,7 @@
 const { generateProcessingId } = require('./processing-id');
 const { downloadImage, MediaDownloadError } = require('./media-downloader');
 const { processImageOCR, OcrServiceError } = require('./ocr-client');
-const { formatDuplicateReply } = require('./reply-formatter');
+const { formatOcrReply, formatDuplicateReply } = require('./reply-formatter');
 const { getImageCaption, normalizeCaptionEmail } = require('./caption-email');
 const { createIdempotencyStore } = require('./idempotency-store');
 const { processImageViaN8n, N8nServiceError } = require('./n8n-client');
@@ -187,6 +187,16 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
                 text: formatDuplicateReply(finalResult, processingId, { groupScope: finalResult.verification.duplicate_scope }),
               }, { quoted: msg });
             }
+          } else if (finalResult?.verification?.verdict === 'VALID' && !captionEmail) {
+            // A captionless match needs an auditable reply so the group can
+            // see which Stripe customer identity was recovered. Keep the
+            // reaction as the primary status marker as with other outcomes.
+            if (config.BOT_REPLY_ENABLED) {
+              await sock.sendMessage(groupId, {
+                text: formatOcrReply(finalResult, processingId, null),
+              }, { quoted: msg });
+            }
+            await sendReaction(groupId, msg, '✅');
           } else {
             await sendReaction(groupId, msg, finalResult?.verification?.verdict === 'VALID' ? '✅' : '❌');
           }

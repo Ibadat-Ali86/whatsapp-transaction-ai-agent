@@ -25,7 +25,9 @@ v2 n8n workflow should call Stripe. It defaults to false and does not expose
 the Stripe secret.
 
 `BOT_REACTIONS_ENABLED=true` enables reaction-first results. Clear valid and
-failed/unclear results react to the original screenshot; duplicate results
+failed/unclear results react to the original screenshot. Captionless valid
+results also send a detailed reply containing the canonical Stripe-recovered
+email so the group can see which customer was matched. Duplicate results
 remain text replies so the bot can explain the original processing record.
 `REQUIRE_EMAIL_CAPTION` is retained for compatibility but should be `false`:
 the caption email is preferred evidence, not a prerequisite. Missing or
@@ -58,6 +60,10 @@ STRIPE_API_BASE_URL=https://api.stripe.com
 STRIPE_API_VERSION=
 STRIPE_TIMEOUT_SECONDS=15
 STRIPE_TIMEZONE=UTC
+# Optional timezone printed by payment receipts, e.g. America/Chicago.
+# Leave empty for multi-group/multi-timezone operation; screenshot hour is then
+# diagnostic only and cannot reject a match. Minutes and date remain filters.
+STRIPE_SCREENSHOT_TIMEZONE=
 STRIPE_MAX_PAGES=10
 STRIPE_LOOKBACK_DAYS=90
 STRIPE_ALLOWED_PAYMENT_METHOD_TYPE=cashapp

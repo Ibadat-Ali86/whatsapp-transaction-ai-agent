@@ -46,6 +46,8 @@ email
 amount
 minutes
 payment_date
+payment_month
+payment_day
 customer_name
 status
 
@@ -84,6 +86,8 @@ Example expected JSON:
   "amount_cents": 2500,
   "minutes": "31",
   "payment_date": "2026-09-06",
+  "payment_month": null,
+  "payment_day": null,
   "status": "Completed"
 }
 

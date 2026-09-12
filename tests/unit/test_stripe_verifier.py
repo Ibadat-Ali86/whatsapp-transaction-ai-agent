@@ -154,6 +154,71 @@ async def test_captionless_lookup_fetches_email_from_attached_stripe_customer():
 
 
 @pytest.mark.asyncio
+async def test_captionless_lookup_handles_receipt_local_time_without_configured_timezone():
+    charge_created = int(datetime(2026, 8, 14, 14, 23, tzinfo=timezone.utc).timestamp())
+
+    def responses(request):
+        assert request.url.path == "/v1/charges"
+        return httpx.Response(200, json={
+            "data": [charge(
+                customer=None,
+                receipt_email="recovered@example.com",
+                created=charge_created,
+            )],
+            "has_more": False,
+        })
+
+    result, _ = await verify_with_responses(
+        responses,
+        evidence_value=PaymentEvidence(
+            email=None,
+            amount_cents=2500,
+            payment_month=8,
+            payment_day=14,
+            minutes=23,
+            payment_hour=9,
+        ),
+    )
+
+    assert result.verdict == "VALID"
+    assert result.matched_transaction["customer_email"] == "recovered@example.com"
+    # Stripe output remains in the configured canonical timezone, while the
+    # screenshot hour is intentionally not used as a hard filter here.
+    assert result.matched_transaction["payment_time"] == "14:23"
+
+
+@pytest.mark.asyncio
+async def test_captionless_lookup_can_enforce_known_receipt_timezone():
+    charge_created = int(datetime(2026, 8, 14, 14, 23, tzinfo=timezone.utc).timestamp())
+
+    def responses(request):
+        assert request.url.path == "/v1/charges"
+        return httpx.Response(200, json={
+            "data": [charge(
+                customer=None,
+                receipt_email="recovered@example.com",
+                created=charge_created,
+            )],
+            "has_more": False,
+        })
+
+    result, _ = await verify_with_responses(
+        responses,
+        screenshot_timezone="America/Chicago",
+        evidence_value=PaymentEvidence(
+            email=None,
+            amount_cents=2500,
+            payment_month=8,
+            payment_day=14,
+            minutes=23,
+            payment_hour=9,
+        ),
+    )
+
+    assert result.verdict == "VALID"
+
+
+@pytest.mark.asyncio
 async def test_wrong_caption_can_recover_only_one_charge_from_two_ocr_constraints():
     def responses(request):
         if request.url.path == "/v1/customers":

@@ -163,10 +163,12 @@ test('n8n v2 code nodes validate optional captions and prepare recoverable Strip
 
   const noEmail = executeCodeNode(prepare, {
     confidence: 0.55,
-    fields: { amount_cents: 2000, minutes: '23', payment_hour: 14 },
+    fields: { amount_cents: 2000, minutes: '23', payment_hour: 9, payment_month: 8, payment_day: 14 },
   }, { references: { 'Validate Event': captionless } })[0].json;
   assert.equal(noEmail.stripe_request.email, null);
   assert.equal(noEmail.stripe_request.amount_cents, 2000);
   assert.equal(noEmail.stripe_request.minutes, 23);
-  assert.equal(noEmail.stripe_request.payment_hour, 14);
+  assert.equal(noEmail.stripe_request.payment_hour, 9);
+  assert.equal(noEmail.stripe_request.payment_month, 8);
+  assert.equal(noEmail.stripe_request.payment_day, 14);
 });

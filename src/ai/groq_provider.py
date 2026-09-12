@@ -19,6 +19,8 @@ Return ONLY valid JSON with these exact keys (use null for missing fields):
   "minutes": "<2-digit minute component of payment time, e.g. '31', or null>",
   "payment_hour": "<24-hour local payment hour 0-23, or null>",
   "payment_date": "<date in YYYY-MM-DD format or null>",
+  "payment_month": "<numeric month 1-12 when only a month/day receipt date is visible, or null>",
+  "payment_day": "<numeric day 1-31 when only a month/day receipt date is visible, or null>",
   "customer_name": "<customer name or null>",
   "status": "<payment status text like 'Completed' or null>"
 }

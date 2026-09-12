@@ -22,6 +22,10 @@ class Settings(BaseSettings):
     STRIPE_API_VERSION: str = ''
     STRIPE_TIMEOUT_SECONDS: float = 15.0
     STRIPE_TIMEZONE: str = 'UTC'
+    # Optional timezone of receipt clocks. Leave empty when group members may
+    # send receipts from different local zones; minute plus amount/date
+    # matching remains timezone-independent and fail-closed.
+    STRIPE_SCREENSHOT_TIMEZONE: str = ''
     STRIPE_MAX_PAGES: int = 10
     STRIPE_LOOKBACK_DAYS: int = 90
     STRIPE_ALLOWED_PAYMENT_METHOD_TYPE: str = 'cashapp'
