@@ -8,6 +8,9 @@ WhatsApp Groups
 Baileys Node.js Bot
     |
     v
+Durable Screenshot Queue
+    |
+    v
 n8n Webhook
     |
     +--> image/hash preprocessing
@@ -58,7 +61,15 @@ Baileys
 ## Component responsibilities
 
 ### Baileys
-Only WhatsApp transport and message/media handling.
+WhatsApp transport and message/media handling. It persists incoming jobs and
+uses one controlled worker so OCR, n8n, and Stripe calls are not started in
+parallel during group bursts.
+
+### Processing queue
+The local queue is the source of truth for job lifecycle while the single-bot
+deployment is running. It provides per-group FIFO ordering, fair scheduling,
+bounded backlog, retry backoff, restart recovery, and dead-letter handling.
+It stores metadata only and keeps screenshot files temporary.
 
 ### n8n
 Workflow orchestration, routing, external integrations, scheduling, and operational automation.

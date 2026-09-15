@@ -1,23 +1,24 @@
 const { generateProcessingId } = require('./processing-id');
-const { downloadImage, MediaDownloadError } = require('./media-downloader');
-const { processImageOCR, OcrServiceError } = require('./ocr-client');
+const { downloadImage } = require('./media-downloader');
+const { processImageOCR } = require('./ocr-client');
 const { formatOcrReply, formatDuplicateReply } = require('./reply-formatter');
 const { getImageCaption, normalizeCaptionEmail } = require('./caption-email');
 const { createIdempotencyStore } = require('./idempotency-store');
-const { processImageViaN8n, N8nServiceError } = require('./n8n-client');
+const { processImageViaN8n } = require('./n8n-client');
 const fs = require('fs').promises;
 const crypto = require('crypto');
 const { isAllowedGroupJid, hashGroupJid } = require('./group-access');
 const { createDuplicateStore } = require('./duplicate-store');
+const { createProcessingQueue, QueueFullError } = require('./processing-queue');
 
 /**
- * Orchestrates the processing of incoming WhatsApp messages.
- * @param {any} sock - Baileys socket
- * @param {object} config - Configuration object
- * @param {any} logger - Pino logger instance
- * @returns {function} Message handler function
+ * Orchestrates WhatsApp intake and delegates expensive work to a durable,
+ * single-worker queue. The queue is deliberately created outside the
+ * messages.upsert callback so bursts from many groups cannot run pipelines in
+ * parallel.
  */
 function createMessageHandler(sock, config, logger, dependencies = {}) {
+  const getSock = dependencies.getSock || (() => sock);
   const downloadImageFn = dependencies.downloadImage || downloadImage;
   const processImageOCRFn = dependencies.processImageOCR || processImageOCR;
   const processImageViaN8nFn = dependencies.processImageViaN8n || processImageViaN8n;
@@ -28,11 +29,28 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
     phashMaxDistance: config.DUPLICATE_PHASH_MAX_DISTANCE || 6,
   });
   const groupNameCache = new Map();
+
+  const groupHash = groupId => hashGroupJid(groupId);
+  const duplicateScope = (record, groupId) => record?.group_id_hash === groupHash(groupId) ? 'same_group' : 'another_group';
+
+  const sendReaction = async (groupId, message, text) => {
+    if (config.BOT_REACTIONS_ENABLED === false) return;
+    const currentSock = getSock();
+    if (!currentSock) {
+      const error = new Error('WhatsApp socket is unavailable');
+      error.retryable = true;
+      throw error;
+    }
+    await currentSock.sendMessage(groupId, { react: { text, key: message.key } });
+  };
+
   const resolveGroupName = dependencies.getGroupName || (async groupId => {
     if (!groupId) return null;
     if (groupNameCache.has(groupId)) return groupNameCache.get(groupId);
     try {
-      const metadata = await sock.groupMetadata(groupId);
+      const currentSock = getSock();
+      if (!currentSock) return null;
+      const metadata = await currentSock.groupMetadata(groupId);
       const subject = typeof metadata?.subject === 'string' ? metadata.subject.trim() : '';
       const groupName = subject ? subject.replace(/\s+/g, ' ').slice(0, 120) : null;
       groupNameCache.set(groupId, groupName);
@@ -43,14 +61,191 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
       return null;
     }
   });
-  const groupHash = groupId => hashGroupJid(groupId);
-  const sendReaction = async (groupId, msg, text) => {
-    if (config.BOT_REACTIONS_ENABLED === false) return;
-    await sock.sendMessage(groupId, { react: { text, key: msg.key } });
-  };
-  const duplicateScope = (record, groupId) => record?.group_id_hash === groupHash(groupId) ? 'same_group' : 'another_group';
 
-  return async (messageUpdate) => {
+  const processJob = async job => {
+    let tempPath = null;
+    let imageHash = null;
+    const groupId = job.group_id;
+    const message = job.message;
+    const startTime = Date.now();
+
+    try {
+      const currentSock = getSock();
+      if (!currentSock) {
+        const error = new Error('WhatsApp socket is unavailable');
+        error.retryable = true;
+        throw error;
+      }
+
+      const { imageBytes, mimeType: downloadedMime, tempPath: downloadedPath } = await downloadImageFn(currentSock, message, job.processing_id);
+      tempPath = downloadedPath;
+      imageHash = crypto.createHash('sha256').update(imageBytes).digest('hex');
+
+      const imageClaim = duplicateStore.claimImage({
+        sha256: imageHash,
+        processingId: job.processing_id,
+        groupIdHash: hashGroupJid(groupId),
+        groupName: job.group_name,
+        captionEmail: job.caption_email,
+      });
+      if (imageClaim.duplicate) {
+        const duplicateResult = {
+          provider: 'duplicate-detector',
+          confidence: 1,
+          fields: { email: job.caption_email },
+          verification: {
+            status: 'DUPLICATE',
+            verdict: 'DUPLICATE',
+            reason_code: `DUPLICATE_IMAGE_${imageClaim.matchType}`,
+            duplicate_of_processing_id: imageClaim.record.processing_id,
+            duplicate_scope: duplicateScope(imageClaim.record, groupId),
+          },
+        };
+        if (config.BOT_REPLY_ENABLED) {
+          await currentSock.sendMessage(groupId, {
+            text: formatDuplicateReply(duplicateResult, job.processing_id, {
+              groupScope: duplicateScope(imageClaim.record, groupId),
+              originalGroupName: imageClaim.record.group_name,
+            }),
+          }, { quoted: message });
+        }
+        logger.info({ processingId: job.processing_id, groupIdHash: hashGroupJid(groupId), matchType: imageClaim.matchType }, 'Duplicate image detected');
+        return { status: 'COMPLETED', verdict: 'DUPLICATE', processing_id: job.processing_id };
+      }
+
+      const imageBase64 = imageBytes.toString('base64');
+      const eventPayload = {
+        processing_id: job.processing_id,
+        source: 'whatsapp',
+        message_id: job.message_id,
+        group_id: groupId,
+        sender_jid: job.sender_jid,
+        received_at: job.received_at,
+        is_forwarded: Boolean(job.is_forwarded),
+        caption_email: job.caption_email,
+        stripe_verification_enabled: config.STRIPE_VERIFICATION_ENABLED === true,
+        image: { mime_type: downloadedMime, base64: imageBase64 },
+      };
+
+      const ocrResult = config.N8N_ENABLED
+        ? await processImageViaN8nFn(eventPayload)
+        : await processImageOCRFn({
+          imageBase64,
+          mimeType: downloadedMime,
+          processingId: job.processing_id,
+          messageId: job.message_id,
+          groupId,
+          senderJid: job.sender_jid,
+          captionEmail: job.caption_email,
+        });
+
+      const fields = ocrResult?.fields || {};
+      const imageEvidence = duplicateStore.registerImageEvidence({
+        sha256: imageHash,
+        phash: ocrResult?.image_phash,
+        captionEmail: job.caption_email,
+        amountCents: fields.amount_cents,
+        processingId: job.processing_id,
+      });
+      let finalResult = ocrResult;
+      if (imageEvidence.duplicate) {
+        finalResult = {
+          ...ocrResult,
+          verification: {
+            ...(ocrResult.verification || {}),
+            status: 'DUPLICATE',
+            verdict: 'DUPLICATE',
+            reason_code: `DUPLICATE_IMAGE_${imageEvidence.matchType}`,
+            duplicate_of_processing_id: imageEvidence.record.processing_id,
+            duplicate_scope: duplicateScope(imageEvidence.record, groupId),
+            duplicate_group_name: imageEvidence.record.group_name,
+          },
+        };
+      } else if (ocrResult?.verification?.verdict === 'VALID' && ocrResult.verification.stripe_charge_id) {
+        const transactionClaim = duplicateStore.claimTransaction(`stripe:${ocrResult.verification.stripe_charge_id}`, {
+          processingId: job.processing_id,
+          groupIdHash: hashGroupJid(groupId),
+          groupName: job.group_name,
+        });
+        if (transactionClaim.duplicate) {
+          finalResult = {
+            ...ocrResult,
+            verification: {
+              ...ocrResult.verification,
+              status: 'DUPLICATE',
+              verdict: 'DUPLICATE',
+              reason_code: 'DUPLICATE_STRIPE_TRANSACTION',
+              duplicate_of_processing_id: transactionClaim.record.processing_id,
+              duplicate_scope: duplicateScope(transactionClaim.record, groupId),
+              duplicate_group_name: transactionClaim.record.group_name,
+            },
+          };
+        }
+      }
+
+      if (finalResult?.verification?.verdict === 'DUPLICATE') {
+        if (config.BOT_REPLY_ENABLED) {
+          await currentSock.sendMessage(groupId, {
+            text: formatDuplicateReply(finalResult, job.processing_id, {
+              groupScope: finalResult.verification.duplicate_scope,
+              originalGroupName: finalResult.verification.duplicate_group_name,
+            }),
+          }, { quoted: message });
+        }
+      } else if (finalResult?.verification?.verdict === 'VALID' && !job.caption_email) {
+        if (config.BOT_REPLY_ENABLED) {
+          await currentSock.sendMessage(groupId, {
+            text: formatOcrReply(finalResult, job.processing_id, null),
+          }, { quoted: message });
+        }
+        await sendReaction(groupId, message, '✅');
+      } else {
+        const verdict = finalResult?.verification?.verdict;
+        await sendReaction(groupId, message, verdict === 'VALID' ? '✅' : verdict === 'UNCLEAR' || !verdict ? '⚠️' : '❌');
+      }
+
+      logger.info({ processingId: job.processing_id, duration_ms: Date.now() - startTime, verdict: finalResult?.verification?.verdict || 'UNVERIFIED' }, 'Message processing complete');
+      return { status: 'COMPLETED', verdict: finalResult?.verification?.verdict || 'UNVERIFIED', processing_id: job.processing_id };
+    } catch (error) {
+      if (imageHash && error?.retryable !== true) error.imageHash = imageHash;
+      logger.error({ processingId: job.processing_id, retryable: error?.retryable === true, errorType: error?.name || 'Error', errorCode: error?.code || null, err: error }, 'Queued screenshot processing failed');
+      throw error;
+    } finally {
+      if (tempPath) {
+        try {
+          await fs.unlink(tempPath);
+          logger.debug({ processingId: job.processing_id, tempPath }, 'Temporary file deleted');
+        } catch (error) {
+          logger.error({ processingId: job.processing_id, tempPath, err: error }, 'Failed to delete temporary file');
+        }
+      }
+    }
+  };
+
+  const onDeadLetter = async (job, error) => {
+    logger.error({ processingId: job.processing_id, attempts: job.attempts, errorType: error?.name || 'Error', errorCode: error?.code || null }, 'Screenshot moved to dead-letter review');
+    if (error?.imageHash) duplicateStore.releaseImage(error.imageHash);
+    try {
+      await sendReaction(job.group_id, { key: job.message_key }, '⚠️');
+    } catch (notificationError) {
+      logger.error({ processingId: job.processing_id, err: notificationError }, 'Unable to send dead-letter reaction');
+    }
+  };
+
+  const queue = dependencies.processingQueue || createProcessingQueue({
+    filePath: config.PROCESSING_QUEUE_PATH || null,
+    concurrency: config.PROCESSING_QUEUE_CONCURRENCY || 1,
+    maxPending: config.PROCESSING_QUEUE_MAX_PENDING || 200,
+    maxAttempts: config.PROCESSING_QUEUE_MAX_ATTEMPTS || 4,
+    backoffBaseMs: config.PROCESSING_QUEUE_BACKOFF_BASE_MS || 5000,
+    backoffMaxMs: config.PROCESSING_QUEUE_BACKOFF_MAX_MS || 300000,
+    cooldownMs: config.PROCESSING_QUEUE_COOLDOWN_MS ?? 250,
+    worker: processJob,
+    onDeadLetter,
+    logger,
+  });
+
+  const handler = async messageUpdate => {
     try {
       const messages = messageUpdate?.messages || [];
       for (const msg of messages) {
@@ -59,9 +254,7 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
           logger.debug({ groupIdHash: hashGroupJid(groupId) }, 'Ignoring message outside the WhatsApp group allowlist');
           continue;
         }
-
         if (!msg.message || msg.key?.fromMe) continue;
-
         const isImage = !!(msg.message.imageMessage || msg.message.extendedTextMessage?.contextInfo?.quotedMessage?.imageMessage);
         if (!isImage) continue;
 
@@ -72,208 +265,56 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
           continue;
         }
 
-        const caption = getImageCaption(msg);
-        const captionEmail = normalizeCaptionEmail(caption);
+        const captionEmail = normalizeCaptionEmail(getImageCaption(msg));
         const groupName = await resolveGroupName(groupId);
         if (!captionEmail) logger.info({ messageId, groupIdHash: groupHash(groupId) }, 'No valid caption email; continuing with OCR and Stripe evidence recovery');
 
         const processingId = generateProcessingId();
         const senderJid = msg.key.participant || msg.key.remoteJid;
         const hashedJid = crypto.createHash('sha256').update(senderJid).digest('hex').substring(0, 10);
-        
         const mimeType = msg.message.imageMessage?.mimetype || msg.message.extendedTextMessage?.contextInfo?.quotedMessage?.imageMessage?.mimetype || 'unknown';
-        logger.info({ processingId, messageId, groupIdHash: hashGroupJid(groupId), senderJid: hashedJid, mimeType }, 'Incoming image message');
+        logger.info({ processingId, messageId, groupIdHash: hashGroupJid(groupId), senderJid: hashedJid, mimeType, queueDepth: queue.pendingCount }, 'Incoming image queued');
 
-        let tempPath = null;
-        let processingSucceeded = false;
-        let imageHash = null;
-        let imageClaimed = false;
-        const startTime = Date.now();
+        const job = {
+          processing_id: processingId,
+          idempotency_key: idempotencyKey,
+          message_id: messageId,
+          message_key: msg.key,
+          message: msg,
+          group_id: groupId,
+          group_name: groupName,
+          sender_jid: senderJid,
+          received_at: new Date().toISOString(),
+          is_forwarded: Boolean(msg.message?.imageMessage?.contextInfo?.isForwarded),
+          caption_email: captionEmail,
+        };
 
         try {
-          const { imageBytes, mimeType: downloadedMime, tempPath: tp } = await downloadImageFn(sock, msg, processingId);
-          tempPath = tp;
-
-          imageHash = crypto.createHash('sha256').update(imageBytes).digest('hex');
-          const imageClaim = duplicateStore.claimImage({
-            sha256: imageHash,
-            processingId,
-            groupIdHash: hashGroupJid(groupId),
-            groupName,
-            captionEmail,
-          });
-          if (imageClaim.duplicate) {
-            const duplicateResult = {
-              provider: 'duplicate-detector',
-              confidence: 1,
-              fields: { email: captionEmail },
-              verification: {
-                status: 'DUPLICATE',
-                verdict: 'DUPLICATE',
-                reason_code: `DUPLICATE_IMAGE_${imageClaim.matchType}`,
-                duplicate_of_processing_id: imageClaim.record.processing_id,
-                duplicate_scope: duplicateScope(imageClaim.record, groupId),
-              },
-            };
-            if (config.BOT_REPLY_ENABLED) {
-              await sock.sendMessage(groupId, {
-                text: formatDuplicateReply(duplicateResult, processingId, {
-                  groupScope: duplicateScope(imageClaim.record, groupId),
-                  originalGroupName: imageClaim.record.group_name,
-                }),
-              }, { quoted: msg });
+          await queue.enqueue(job);
+          idempotencyStore.complete(idempotencyKey);
+        } catch (error) {
+          idempotencyStore.release(idempotencyKey);
+          if (error instanceof QueueFullError) {
+            logger.error({ processingId, queueDepth: queue.pendingCount }, 'Screenshot rejected because processing queue is full');
+            try {
+              await sendReaction(groupId, msg, '⚠️');
+            } catch (notificationError) {
+              logger.error({ processingId, err: notificationError }, 'Unable to send queue-full reaction');
             }
-            logger.info({ processingId, groupIdHash: hashGroupJid(groupId), matchType: imageClaim.matchType }, 'Duplicate image detected');
-            idempotencyStore.complete(idempotencyKey);
-            processingSucceeded = true;
             continue;
           }
-          imageClaimed = true;
-          
-          const imageBase64 = imageBytes.toString('base64');
-
-          const eventPayload = {
-            processing_id: processingId,
-            source: 'whatsapp',
-            message_id: messageId,
-            group_id: groupId,
-            sender_jid: senderJid,
-            received_at: new Date().toISOString(),
-            is_forwarded: Boolean(msg.message?.imageMessage?.contextInfo?.isForwarded),
-            caption_email: captionEmail,
-            stripe_verification_enabled: config.STRIPE_VERIFICATION_ENABLED === true,
-            image: {
-              mime_type: downloadedMime,
-              base64: imageBase64,
-            },
-          };
-
-          const ocrResult = config.N8N_ENABLED
-            ? await processImageViaN8nFn(eventPayload)
-            : await processImageOCRFn({
-            imageBase64,
-            mimeType: downloadedMime,
-            processingId,
-            messageId,
-            groupId,
-            senderJid,
-            captionEmail,
-          });
-          
-          const fields = ocrResult?.fields || {};
-          const imageEvidence = duplicateStore.registerImageEvidence({
-            sha256: imageHash,
-            phash: ocrResult?.image_phash,
-            captionEmail,
-            amountCents: fields.amount_cents,
-            processingId,
-          });
-          let finalResult = ocrResult;
-          if (imageEvidence.duplicate) {
-            finalResult = {
-              ...ocrResult,
-              verification: {
-                ...(ocrResult.verification || {}),
-                status: 'DUPLICATE',
-                verdict: 'DUPLICATE',
-                reason_code: `DUPLICATE_IMAGE_${imageEvidence.matchType}`,
-                duplicate_of_processing_id: imageEvidence.record.processing_id,
-                duplicate_scope: duplicateScope(imageEvidence.record, groupId),
-                duplicate_group_name: imageEvidence.record.group_name,
-              },
-            };
-          } else if (ocrResult?.verification?.verdict === 'VALID' && ocrResult.verification.stripe_charge_id) {
-            const transactionKey = `stripe:${ocrResult.verification.stripe_charge_id}`;
-            const transactionClaim = duplicateStore.claimTransaction(transactionKey, {
-              processingId,
-              groupIdHash: hashGroupJid(groupId),
-              groupName,
-            });
-            if (transactionClaim.duplicate) {
-              finalResult = {
-                ...ocrResult,
-                verification: {
-                  ...ocrResult.verification,
-                  status: 'DUPLICATE',
-                  verdict: 'DUPLICATE',
-                  reason_code: 'DUPLICATE_STRIPE_TRANSACTION',
-                  duplicate_of_processing_id: transactionClaim.record.processing_id,
-                  duplicate_scope: duplicateScope(transactionClaim.record, groupId),
-                  duplicate_group_name: transactionClaim.record.group_name,
-                },
-              };
-            }
-          }
-
-          if (finalResult?.verification?.verdict === 'DUPLICATE') {
-            if (config.BOT_REPLY_ENABLED) {
-              await sock.sendMessage(groupId, {
-                text: formatDuplicateReply(finalResult, processingId, {
-                  groupScope: finalResult.verification.duplicate_scope,
-                  originalGroupName: finalResult.verification.duplicate_group_name,
-                }),
-              }, { quoted: msg });
-            }
-          } else if (finalResult?.verification?.verdict === 'VALID' && !captionEmail) {
-            // A captionless match needs an auditable reply so the group can
-            // see which Stripe customer identity was recovered. Keep the
-            // reaction as the primary status marker as with other outcomes.
-            if (config.BOT_REPLY_ENABLED) {
-              await sock.sendMessage(groupId, {
-                text: formatOcrReply(finalResult, processingId, null),
-              }, { quoted: msg });
-            }
-            await sendReaction(groupId, msg, '✅');
-          } else {
-            const verdict = finalResult?.verification?.verdict;
-            await sendReaction(
-              groupId,
-              msg,
-              verdict === 'VALID' ? '✅' : verdict === 'UNCLEAR' || !verdict ? '⚠️' : '❌',
-            );
-          }
-          
-          logger.info({ processingId, duration_ms: Date.now() - startTime, verdict: 'success' }, 'Message processing complete');
-          idempotencyStore.complete(idempotencyKey);
-          processingSucceeded = true;
-        } catch (error) {
-          if (error instanceof MediaDownloadError) {
-            logger.error({ processingId, err: error }, 'Media download error');
-            await sendReaction(groupId, msg, '❌');
-          } else if (error instanceof OcrServiceError) {
-            logger.error({ processingId, err: error }, 'OCR service error');
-            await sendReaction(groupId, msg, '❌');
-          } else if (error instanceof N8nServiceError) {
-            logger.error({
-              processingId,
-              retryable: error.retryable,
-              status: error.status,
-              code: error.code,
-            }, 'n8n workflow service error');
-            await sendReaction(groupId, msg, '❌');
-          } else {
-            logger.error({ processingId, err: error, stack: error.stack }, 'Unhandled error processing message');
-            await sendReaction(groupId, msg, '❌');
-          }
-          // A failed delivery may be retried; concurrent duplicate deliveries
-          // remain suppressed while the first attempt is active.
-          if (!processingSucceeded) idempotencyStore.release(idempotencyKey);
-          if (!processingSucceeded && imageClaimed && imageHash) duplicateStore.releaseImage(imageHash);
-        } finally {
-          if (tempPath) {
-            try {
-              await fs.unlink(tempPath);
-              logger.debug({ processingId, tempPath }, 'Temporary file deleted');
-            } catch (err) {
-              logger.error({ processingId, tempPath, err }, 'Failed to delete temporary file');
-            }
-          }
+          throw error;
         }
       }
     } catch (globalError) {
-      logger.error({ err: globalError }, 'Message handler crashed');
+      logger.error({ err: globalError }, 'Message intake handler crashed');
     }
   };
+
+  handler.start = () => queue.start();
+  handler.stop = () => queue.stop();
+  handler.queue = queue;
+  return handler;
 }
 
 module.exports = { createMessageHandler };

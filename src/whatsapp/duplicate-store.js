@@ -78,6 +78,9 @@ function createDuplicateStore({
       if (!/^[0-9a-f]{64}$/i.test(sha256 || '')) throw new Error('Invalid image SHA-256');
       prune();
       const existing = state.images[sha256];
+      if (existing?.processing_id === processingId && existing.status === 'PROCESSING') {
+        return { duplicate: false, resumed: true, record: existing };
+      }
       if (existing) return { duplicate: true, matchType: 'SHA256', record: existing };
 
       const record = {
@@ -134,6 +137,9 @@ function createDuplicateStore({
       }
       prune();
       const existing = state.transactions[transactionKey];
+      if (existing?.processing_id === processingId) {
+        return { duplicate: false, resumed: true, record: existing };
+      }
       if (existing) return { duplicate: true, record: existing };
       const record = {
         processing_id: processingId,

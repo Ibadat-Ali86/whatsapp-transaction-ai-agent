@@ -11,6 +11,11 @@ const parseInteger = (value, fallback) => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 };
 
+const parseNonNegativeInteger = (value, fallback) => {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+};
+
 const config = {
   OCR_SERVICE_URL: process.env.OCR_SERVICE_URL || 'http://localhost:8000',
   N8N_ENABLED: process.env.N8N_ENABLED === 'true',
@@ -32,6 +37,13 @@ const config = {
   DUPLICATE_STORE_PATH: process.env.DUPLICATE_STORE_PATH || 'data/duplicate-store.json',
   DUPLICATE_RETENTION_DAYS: parseInteger(process.env.DUPLICATE_RETENTION_DAYS, 90),
   DUPLICATE_PHASH_MAX_DISTANCE: parseInteger(process.env.DUPLICATE_PHASH_MAX_DISTANCE, 6),
+  PROCESSING_QUEUE_PATH: process.env.PROCESSING_QUEUE_PATH || 'data/processing-queue.json',
+  PROCESSING_QUEUE_CONCURRENCY: parseInteger(process.env.PROCESSING_QUEUE_CONCURRENCY, 1),
+  PROCESSING_QUEUE_MAX_PENDING: parseInteger(process.env.PROCESSING_QUEUE_MAX_PENDING, 200),
+  PROCESSING_QUEUE_MAX_ATTEMPTS: parseInteger(process.env.PROCESSING_QUEUE_MAX_ATTEMPTS, 4),
+  PROCESSING_QUEUE_BACKOFF_BASE_MS: parseInteger(process.env.PROCESSING_QUEUE_BACKOFF_BASE_MS, 5000),
+  PROCESSING_QUEUE_BACKOFF_MAX_MS: parseInteger(process.env.PROCESSING_QUEUE_BACKOFF_MAX_MS, 300000),
+  PROCESSING_QUEUE_COOLDOWN_MS: parseNonNegativeInteger(process.env.PROCESSING_QUEUE_COOLDOWN_MS, 250),
   OCR_TIMEOUT_MS: parseInteger(process.env.OCR_TIMEOUT_MS, 60000),
   MAX_IMAGE_SIZE_MB: parseInteger(process.env.MAX_IMAGE_SIZE_MB, 10),
   BOT_REPLY_ENABLED: process.env.BOT_REPLY_ENABLED !== 'false',

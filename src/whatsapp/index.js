@@ -54,16 +54,25 @@ Auth Dir: ${config.AUTH_DIR}/
     logger.info('n8n service is ready.');
   }
 
+  // Keep one queue/handler across Baileys socket replacements. Recreating the
+  // handler on reconnect would create a second worker and could process the
+  // same durable queue concurrently.
+  const socketRef = { current: null };
+  const handler = createMessageHandler(null, config, logger, {
+    getSock: () => socketRef.current,
+  });
   const connection = await createConnection({
     onSocket: (sock) => {
-      const handler = createMessageHandler(sock, config, logger);
+      socketRef.current = sock;
       sock.ev.on('messages.upsert', handler);
+      handler.start();
     },
   });
 
   const shutdown = async (signal) => {
     logger.info({ signal }, 'Graceful shutdown initiated');
     try {
+      handler.stop();
       connection.stop();
       logger.info('WhatsApp socket closed.');
     } catch (err) {

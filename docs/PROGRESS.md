@@ -1,7 +1,7 @@
 # PROJECT PROGRESS
 
 ## Current phase
-Phase 2 — n8n Integration
+Phase 2 — n8n Integration and controlled processing queue
 
 ## Status
 Phase 1 code path is complete and regression-tested. The live WhatsApp test
@@ -51,6 +51,9 @@ Stripe test fixtures remain controlled follow-ups.
 - [x] message ID idempotency implemented
 - [x] optional OCR-to-Stripe v2 workflow exported
 - [x] workflow payload bounds, duplicate guard, and execution-retention hardening added
+- [x] durable local screenshot queue with per-group FIFO and fair scheduling
+- [x] bounded retry/backoff and dead-letter handling added
+- [x] queue restart recovery and queue unit tests added
 - [x] webhook tested with synthetic OCR fixture
 - [x] authenticated webhook tested, including invalid-token rejection
 - [x] synthetic message-handler -> n8n -> OCR -> reply smoke test

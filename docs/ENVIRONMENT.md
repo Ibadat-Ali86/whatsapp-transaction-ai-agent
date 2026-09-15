@@ -114,6 +114,36 @@ uses multiple bot processes or hosts, replace it with a shared transactional
 store before rollout; otherwise two processes can claim the same image or
 Stripe charge concurrently.
 
+## Screenshot processing queue
+
+The Baileys adapter uses a durable local queue at `PROCESSING_QUEUE_PATH`
+(default `data/processing-queue.json`). The queue stores job metadata and the
+serialized WhatsApp message needed to re-download media after a restart; it
+does not permanently store screenshots. Completed and dead-letter records are
+automatically bounded by age and count.
+
+The default production-safe settings are:
+
+```text
+PROCESSING_QUEUE_CONCURRENCY=1
+PROCESSING_QUEUE_MAX_PENDING=200
+PROCESSING_QUEUE_MAX_ATTEMPTS=4
+PROCESSING_QUEUE_BACKOFF_BASE_MS=5000
+PROCESSING_QUEUE_BACKOFF_MAX_MS=300000
+PROCESSING_QUEUE_COOLDOWN_MS=250
+```
+
+Jobs are processed in FIFO order within each group and scheduled fairly across
+groups. Retryable failures remain queued with exponential backoff. Permanent
+failures move to dead-letter review and receive a warning reaction; they are
+never automatically labeled fake. A running job is recovered as queued when
+the bot restarts. Run only one active Baileys bot instance for a given auth
+directory and queue file.
+
+The local queue is appropriate for one Droplet and one bot process. Before
+running multiple bot or worker processes, replace it with a shared transactional
+queue/ledger such as Redis plus a shared database, and add a distributed lock.
+
 For this verifier, restricted keys must have read-only access to Customers and
 Charges. Never grant write permissions. The internal service token is required
 on verification requests and must be configured in the n8n credential/request
