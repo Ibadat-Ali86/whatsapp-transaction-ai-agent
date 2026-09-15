@@ -110,6 +110,7 @@ OCR result:
   "raw_text": "...",
   "fields": {
     "email": null,
+    "transaction_id": null,
     "amount": null,
     "minutes": null,
     "payment_date": null,

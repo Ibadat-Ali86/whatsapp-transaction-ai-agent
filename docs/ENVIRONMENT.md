@@ -32,7 +32,10 @@ remain text replies so the bot can explain the original processing record.
 `REQUIRE_EMAIL_CAPTION` is retained for compatibility but should be `false`:
 the caption email is preferred evidence, not a prerequisite. Missing or
 incorrect captions are recovered only from deterministic OCR evidence and one
-eligible Stripe match; ambiguous evidence remains unconfirmed.
+eligible Stripe match; ambiguous evidence remains unconfirmed and reacts with
+`⚠️`, never as an automatic fake/duplicate decision. An exact payment or
+transaction identifier extracted from the screenshot is also used to select
+the matching Stripe charge when it agrees with the eligible payment data.
 
 ## WhatsApp group access
 
@@ -67,6 +70,20 @@ STRIPE_SCREENSHOT_TIMEZONE=
 STRIPE_MAX_PAGES=10
 STRIPE_LOOKBACK_DAYS=90
 STRIPE_ALLOWED_PAYMENT_METHOD_TYPE=cashapp
+STRIPE_CACHE_TTL_SECONDS=10
+STRIPE_CACHE_MAX_ENTRIES=512
+STRIPE_REQUESTS_PER_SECOND=20
+STRIPE_MAX_CONCURRENT_REQUESTS=5
+STRIPE_RETRY_ATTEMPTS=2
+STRIPE_BACKOFF_BASE_SECONDS=0.5
+STRIPE_BACKOFF_MAX_SECONDS=8
+
+Stripe reads are protected by a bounded in-memory cache, a process-wide
+20-request/second scheduler, a five-request concurrency limit, and two
+retries for transient failures. The cache is short-lived and never persisted;
+it is an optimization only, so Stripe remains the source of truth. Keep the
+same settings across service instances and use a shared distributed limiter
+and cache before running multiple OCR-service processes.
 
 When `STRIPE_MODE=test`, use standard `sk_test_` or restricted `rk_test_`
 keys. For an explicitly approved live environment, set `STRIPE_MODE=live` and
@@ -83,6 +100,14 @@ allowlisted groups and bot restarts. Recompressed/resized copies are compared
 with pHash only when the caption identity and OCR amount also agree. A
 uniquely matched Stripe charge ID is independently claimed so the same
 payment is marked duplicate even when the image changes.
+
+Duplicate records retain the first-seen group-name snapshot when WhatsApp
+metadata is available. Duplicate replies include the original processing ID,
+the same-group or named-origin-group scope, and the detection proof: exact
+image hash, visual pHash match, or repeated Stripe charge. If metadata lookup
+fails, the reply safely falls back to a generic group/workspace description.
+A WhatsApp delete event never releases a claim; deletion is not proof that a
+payment may be safely reprocessed.
 
 The file store is safe for one bot process handling many groups. If production
 uses multiple bot processes or hosts, replace it with a shared transactional

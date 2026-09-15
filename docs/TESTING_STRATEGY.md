@@ -70,6 +70,10 @@ Before production:
 - multiple transactions same email;
 - multiple transactions same amount;
 - same minute collision;
+- same amount and minute with distinct transaction identifiers;
+- wrong caption email with a matching transaction identifier;
+- missing caption email with a matching screenshot payment identifier;
+- identifier collision or identifier/payment-data conflict;
 - timezone scenarios;
 - refunded/failed/pending transactions;
 - pagination beyond first 100 records.

@@ -146,6 +146,33 @@ test('sends a captioned image through OCR once per message ID', async () => {
   assert.deepEqual(reply.react, { text: '✅', key: message.key });
 });
 
+test('uses a warning reaction for an unresolved payment instead of labeling it fake', async () => {
+  let reply;
+  const sock = {
+    sendMessage: async (_jid, content) => { reply = content; },
+  };
+  const handler = createMessageHandler(sock, {
+    ALLOWED_GROUP_JIDS: ['1234567890-1234567890@g.us'],
+    BOT_REPLY_ENABLED: false,
+    BOT_REACTIONS_ENABLED: true,
+    N8N_ENABLED: false,
+  }, logger, {
+    duplicateStore: duplicateStore(),
+    downloadImage: async () => ({ imageBytes: Buffer.from('unclear-image'), mimeType: 'image/png', tempPath: null }),
+    processImageOCR: async () => ({
+      fields: { amount_cents: 2000 },
+      confidence: 0.35,
+      provider: 'tesseract',
+      verification: { verdict: 'UNCLEAR', reason_code: 'MULTIPLE_EXACT_MATCHES' },
+    }),
+  });
+
+  const message = imageMessage('1234567890-1234567890@g.us');
+  await handler({ messages: [message] });
+
+  assert.deepEqual(reply, { react: { text: '⚠️', key: message.key } });
+});
+
 test('routes a captioned image through n8n when enabled', async () => {
   let workflowPayload;
   const sock = { sendMessage: async () => {} };
@@ -194,6 +221,7 @@ test('marks an exact screenshot resend as a duplicate across groups', async () =
       provider: 'tesseract',
       verification: { verdict: 'VALID', stripe_charge_id: 'ch-image-test' },
     }),
+    getGroupName: async groupId => groupId === '1234567890-1234567890@g.us' ? 'Primary Review Group' : 'Secondary Review Group',
   });
 
   await handler({ messages: [captionedImageMessage('1234567890-1234567890@g.us', 'first-message')] });
@@ -202,7 +230,7 @@ test('marks an exact screenshot resend as a duplicate across groups', async () =
   assert.deepEqual(replies[0].react, { text: '✅', key: captionedImageMessage('1234567890-1234567890@g.us', 'first-message').key });
   assert.match(replies[1].text, /Duplicate Screenshot/);
   assert.match(replies[1].text, /DUPLICATE_IMAGE_SHA256/);
-  assert.match(replies[1].text, /another group/);
+  assert.match(replies[1].text, /the group "Primary Review Group"/);
   assert.match(replies[1].text, /Original Processing ID: wa-/);
 });
 
@@ -234,6 +262,7 @@ test('marks a repeated Stripe charge as a transaction duplicate', async () => {
         stripe_charge_id: 'ch_same_transaction',
       },
     }),
+    getGroupName: async groupId => groupId === '1234567890-1234567890@g.us' ? 'Primary Review Group' : 'Secondary Review Group',
   });
 
   await handler({ messages: [captionedImageMessage('1234567890-1234567890@g.us', 'transaction-one')] });
@@ -242,4 +271,5 @@ test('marks a repeated Stripe charge as a transaction duplicate', async () => {
   assert.deepEqual(replies[0].react, { text: '✅', key: captionedImageMessage('1234567890-1234567890@g.us', 'transaction-one').key });
   assert.match(replies[1].text, /Duplicate Screenshot/);
   assert.match(replies[1].text, /DUPLICATE_STRIPE_TRANSACTION/);
+  assert.match(replies[1].text, /Primary Review Group/);
 });

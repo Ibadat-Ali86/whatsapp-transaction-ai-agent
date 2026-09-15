@@ -15,6 +15,7 @@ PROMPT = """You are a payment receipt OCR assistant. Extract payment information
 Return ONLY valid JSON with these exact keys (use null for missing fields):
 {
   "email": "<email address or null>",
+  "transaction_id": "<payment or transaction identifier exactly as shown, or null>",
   "amount": "<amount string like '$25.00' or null>",
   "minutes": "<2-digit minute component of payment time, e.g. '31', or null>",
   "payment_hour": "<24-hour local payment hour 0-23, or null>",

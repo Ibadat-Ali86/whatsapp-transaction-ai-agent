@@ -9,9 +9,14 @@ eligible charge. Ambiguous or insufficient evidence is never approved.
 from __future__ import annotations
 
 import hashlib
+import asyncio
+import copy
+import random
 import re
+import time as monotonic_time
 from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta, timezone
+from collections import OrderedDict
 from typing import Any, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -25,11 +30,24 @@ EMAIL_PATTERN = re.compile(
     r"[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?"
     r"(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$"
 )
+TRANSACTION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{3,127}$")
+TRANSACTION_METADATA_KEYS = {
+    "transaction_id",
+    "transactionid",
+    "payment_id",
+    "payment_identifier",
+    "cash_app_payment_id",
+    "cashapp_payment_id",
+    "cashapp_transaction_id",
+    "external_transaction_id",
+    "receipt_id",
+}
 
 
 @dataclass(frozen=True)
 class PaymentEvidence:
     email: Optional[str] = None
+    transaction_id: Optional[str] = None
     amount_cents: Optional[int] = None
     payment_date: Optional[date] = None
     minutes: Optional[int] = None
@@ -70,16 +88,122 @@ class StripeVerificationResult:
 
 
 class StripeVerificationError(Exception):
-    def __init__(self, reason_code: str, retryable: bool = False):
+    def __init__(
+        self,
+        reason_code: str,
+        retryable: bool = False,
+        retry_after_seconds: Optional[float] = None,
+    ):
         super().__init__(reason_code)
         self.reason_code = reason_code
         self.retryable = retryable
+        self.retry_after_seconds = retry_after_seconds
+
+
+@dataclass
+class _CacheEntry:
+    value: dict[str, Any]
+    expires_at: float
+
+
+class StripeResponseCache:
+    """Bounded, short-lived cache for successful Stripe GET responses.
+
+    Stripe payment data can change shortly after creation, so this is a
+    freshness optimization rather than a source of truth. The cache is kept
+    in memory and scoped to one OCR-service process; it never persists payment
+    data to disk.
+    """
+
+    def __init__(self, ttl_seconds: float = 10.0, max_entries: int = 512):
+        self.ttl_seconds = max(0.0, float(ttl_seconds))
+        self.max_entries = max(1, int(max_entries))
+        self._entries: OrderedDict[str, _CacheEntry] = OrderedDict()
+        self._lock = asyncio.Lock()
+
+    async def get(self, key: str) -> Optional[dict[str, Any]]:
+        if self.ttl_seconds <= 0:
+            return None
+        now = monotonic_time.monotonic()
+        async with self._lock:
+            entry = self._entries.get(key)
+            if entry is None:
+                return None
+            if entry.expires_at <= now:
+                self._entries.pop(key, None)
+                return None
+            self._entries.move_to_end(key)
+            return copy.deepcopy(entry.value)
+
+    async def set(self, key: str, value: dict[str, Any]) -> None:
+        if self.ttl_seconds <= 0:
+            return
+        async with self._lock:
+            self._entries[key] = _CacheEntry(
+                value=copy.deepcopy(value),
+                expires_at=monotonic_time.monotonic() + self.ttl_seconds,
+            )
+            self._entries.move_to_end(key)
+            while len(self._entries) > self.max_entries:
+                self._entries.popitem(last=False)
+
+
+class StripeRequestLimiter:
+    """Process-wide spacing and concurrency controls for Stripe requests."""
+
+    def __init__(self, requests_per_second: float = 20.0, max_concurrent: int = 5):
+        self.requests_per_second = max(0.0, float(requests_per_second))
+        self.interval_seconds = 1.0 / self.requests_per_second if self.requests_per_second else 0.0
+        self._next_request_at = 0.0
+        self._schedule_lock = asyncio.Lock()
+        self._concurrency = asyncio.Semaphore(max(1, int(max_concurrent)))
+
+    async def acquire(self) -> None:
+        if self.interval_seconds <= 0:
+            return
+        async with self._schedule_lock:
+            now = monotonic_time.monotonic()
+            scheduled_at = max(now, self._next_request_at)
+            self._next_request_at = scheduled_at + self.interval_seconds
+        delay = scheduled_at - now
+        if delay > 0:
+            await asyncio.sleep(delay)
+
+    async def __aenter__(self):
+        await self._concurrency.acquire()
+        await self.acquire()
+        return self
+
+    async def __aexit__(self, _exc_type, _exc, _traceback):
+        self._concurrency.release()
+
+
+class StripeVerificationRuntime:
+    """Shared per-account controls reused by concurrent verification requests."""
+
+    def __init__(
+        self,
+        *,
+        cache_ttl_seconds: float = 10.0,
+        cache_max_entries: int = 512,
+        requests_per_second: float = 20.0,
+        max_concurrent_requests: int = 5,
+    ):
+        self.cache = StripeResponseCache(cache_ttl_seconds, cache_max_entries)
+        self.request_limiter = StripeRequestLimiter(requests_per_second, max_concurrent_requests)
 
 
 def normalize_email(value: str) -> str:
     normalized = value.strip().casefold()
     if not EMAIL_PATTERN.fullmatch(normalized):
         raise ValueError("invalid email")
+    return normalized
+
+
+def normalize_transaction_id(value: str) -> str:
+    normalized = value.strip()
+    if not TRANSACTION_ID_PATTERN.fullmatch(normalized):
+        raise ValueError("invalid transaction id")
     return normalized
 
 
@@ -121,6 +245,14 @@ class StripeVerifier:
         max_pages: int = 10,
         lookback_days: int = 90,
         allowed_payment_method_type: str = "cashapp",
+        cache_ttl_seconds: float = 10.0,
+        cache_max_entries: int = 512,
+        requests_per_second: float = 20.0,
+        max_concurrent_requests: int = 5,
+        retry_attempts: int = 2,
+        backoff_base_seconds: float = 0.5,
+        backoff_max_seconds: float = 8.0,
+        runtime: Optional[StripeVerificationRuntime] = None,
         http_client: Optional[httpx.AsyncClient] = None,
         audit_logger: Optional[AuditLogger] = None,
     ):
@@ -134,6 +266,20 @@ class StripeVerifier:
         self.max_pages = max_pages
         self.lookback_days = lookback_days
         self.allowed_payment_method_type = allowed_payment_method_type.casefold()
+        self.cache_ttl_seconds = cache_ttl_seconds
+        self.cache_max_entries = cache_max_entries
+        self.requests_per_second = requests_per_second
+        self.max_concurrent_requests = max_concurrent_requests
+        self.retry_attempts = retry_attempts
+        self.backoff_base_seconds = backoff_base_seconds
+        self.backoff_max_seconds = backoff_max_seconds
+        self.runtime = runtime or StripeVerificationRuntime(
+            cache_ttl_seconds=cache_ttl_seconds,
+            cache_max_entries=cache_max_entries,
+            requests_per_second=requests_per_second,
+            max_concurrent_requests=max_concurrent_requests,
+        )
+        self._cache_namespace = hashlib.sha256(secret_key.encode("utf-8")).hexdigest()[:16]
         self.http_client = http_client
         self.audit_logger = audit_logger or AuditLogger("stripe_verifier")
 
@@ -154,26 +300,73 @@ class StripeVerifier:
             raise StripeVerificationError("STRIPE_MAX_PAGES_INVALID")
         if self.lookback_days < 1 or self.lookback_days > 3650:
             raise StripeVerificationError("STRIPE_LOOKBACK_DAYS_INVALID")
+        if self.cache_ttl_seconds < 0 or self.cache_ttl_seconds > 3600:
+            raise StripeVerificationError("STRIPE_CACHE_TTL_INVALID")
+        if self.cache_max_entries < 1 or self.cache_max_entries > 10000:
+            raise StripeVerificationError("STRIPE_CACHE_MAX_ENTRIES_INVALID")
+        if self.requests_per_second < 0 or self.requests_per_second > 100:
+            raise StripeVerificationError("STRIPE_REQUESTS_PER_SECOND_INVALID")
+        if self.max_concurrent_requests < 1 or self.max_concurrent_requests > 100:
+            raise StripeVerificationError("STRIPE_MAX_CONCURRENT_REQUESTS_INVALID")
+        if self.retry_attempts < 0 or self.retry_attempts > 5:
+            raise StripeVerificationError("STRIPE_RETRY_ATTEMPTS_INVALID")
+        if self.backoff_base_seconds < 0 or self.backoff_base_seconds > 60:
+            raise StripeVerificationError("STRIPE_BACKOFF_BASE_INVALID")
+        if self.backoff_max_seconds < 0 or self.backoff_max_seconds > 300:
+            raise StripeVerificationError("STRIPE_BACKOFF_MAX_INVALID")
+        if self.backoff_max_seconds < self.backoff_base_seconds:
+            raise StripeVerificationError("STRIPE_BACKOFF_RANGE_INVALID")
 
-    async def _get(self, client: httpx.AsyncClient, path: str, params: dict[str, Any]) -> dict[str, Any]:
+    def _cache_key(self, path: str, params: dict[str, Any]) -> str:
+        normalized_params = "&".join(
+            f"{key}={params[key]}" for key in sorted(params)
+        )
+        return f"{self._cache_namespace}|{self.base_url}|{self.api_version}|{path}?{normalized_params}"
+
+    @staticmethod
+    def _retry_after_seconds(response: httpx.Response) -> Optional[float]:
+        value = response.headers.get("retry-after")
+        if value is None:
+            return None
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return None
+        return max(0.0, min(parsed, 300.0))
+
+    def _backoff_seconds(self, attempt: int, retry_after_seconds: Optional[float]) -> float:
+        if retry_after_seconds is not None:
+            return retry_after_seconds
+        upper_bound = min(
+            self.backoff_max_seconds,
+            self.backoff_base_seconds * (2 ** attempt),
+        )
+        return random.uniform(0.0, upper_bound) if upper_bound > 0 else 0.0
+
+    async def _get_once(self, client: httpx.AsyncClient, path: str, params: dict[str, Any]) -> dict[str, Any]:
         headers = {"accept": "application/json"}
         if self.api_version:
             headers["Stripe-Version"] = self.api_version
 
         try:
-            response = await client.get(
-                f"{self.base_url}{path}",
-                params=params,
-                headers=headers,
-                auth=(self.secret_key, ""),
-            )
+            async with self.runtime.request_limiter:
+                response = await client.get(
+                    f"{self.base_url}{path}",
+                    params=params,
+                    headers=headers,
+                    auth=(self.secret_key, ""),
+                )
         except (httpx.TimeoutException, httpx.NetworkError) as exc:
             raise StripeVerificationError("STRIPE_NETWORK_ERROR", retryable=True) from exc
 
         if response.status_code >= 400:
             retryable = response.status_code == 429 or response.status_code >= 500
             reason = "STRIPE_RATE_LIMITED" if response.status_code == 429 else "STRIPE_API_ERROR"
-            raise StripeVerificationError(reason, retryable=retryable)
+            raise StripeVerificationError(
+                reason,
+                retryable=retryable,
+                retry_after_seconds=self._retry_after_seconds(response) if response.status_code == 429 else None,
+            )
 
         try:
             body = response.json()
@@ -182,6 +375,24 @@ class StripeVerifier:
         if not isinstance(body, dict):
             raise StripeVerificationError("STRIPE_INVALID_RESPONSE", retryable=True)
         return body
+
+    async def _get(self, client: httpx.AsyncClient, path: str, params: dict[str, Any]) -> dict[str, Any]:
+        cache_key = self._cache_key(path, params)
+        cached = await self.runtime.cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        for attempt in range(self.retry_attempts + 1):
+            try:
+                body = await self._get_once(client, path, params)
+                await self.runtime.cache.set(cache_key, body)
+                return body
+            except StripeVerificationError as exc:
+                if not exc.retryable or attempt >= self.retry_attempts:
+                    raise
+                await asyncio.sleep(self._backoff_seconds(attempt, exc.retry_after_seconds))
+
+        raise StripeVerificationError("STRIPE_REQUEST_RETRY_EXHAUSTED", retryable=True)
 
     async def _customer_ids(self, client: httpx.AsyncClient, email: str) -> set[str]:
         ids: set[str] = set()
@@ -302,7 +513,9 @@ class StripeVerifier:
         charges, so the caller uses this bounded fallback after that search
         produces no eligible match.
         """
-        now_timestamp = int(datetime.now(timezone.utc).timestamp())
+        # Keep the moving lookback query stable for one short cache bucket;
+        # using the exact current second would defeat response caching.
+        now_timestamp = int(datetime.now(timezone.utc).timestamp()) // 10 * 10
         return await self._charges_for_day(
             client,
             now_timestamp - int(timedelta(days=self.lookback_days).total_seconds()),
@@ -318,6 +531,45 @@ class StripeVerifier:
         if isinstance(billing_details, dict) and isinstance(billing_details.get("email"), str):
             return billing_details["email"].strip().casefold()
         return None
+
+    @staticmethod
+    def _charge_transaction_ids(charge: dict[str, Any]) -> set[str]:
+        """Return explicit provider/reference IDs exposed on a Stripe charge."""
+        values: set[str] = set()
+
+        def add(value: Any) -> None:
+            if isinstance(value, str) and value.strip():
+                values.add(value.strip().casefold())
+
+        for key in ("id", "payment_intent", "balance_transaction", "receipt_number"):
+            value = charge.get(key)
+            add(value.get("id") if isinstance(value, dict) else value)
+
+        source = charge.get("source")
+        if isinstance(source, dict):
+            add(source.get("id"))
+        else:
+            add(source)
+
+        payment_method_details = charge.get("payment_method_details")
+        if isinstance(payment_method_details, dict):
+            cashapp = payment_method_details.get("cashapp")
+            if isinstance(cashapp, dict):
+                add(cashapp.get("transaction_id"))
+                add(cashapp.get("payment_id"))
+
+        metadata = charge.get("metadata")
+        if isinstance(metadata, dict):
+            for key, value in metadata.items():
+                if str(key).casefold() in TRANSACTION_METADATA_KEYS:
+                    add(value)
+        return values
+
+    @classmethod
+    def _transaction_id_matches(cls, charge: dict[str, Any], evidence: PaymentEvidence) -> bool:
+        if not evidence.transaction_id:
+            return False
+        return evidence.transaction_id.casefold() in cls._charge_transaction_ids(charge)
 
     def _matches(
         self,
@@ -426,9 +678,13 @@ class StripeVerifier:
             normalized_email = None
             if evidence.email is not None and evidence.email.strip():
                 normalized_email = normalize_email(evidence.email)
+            normalized_transaction_id = None
+            if evidence.transaction_id is not None and evidence.transaction_id.strip():
+                normalized_transaction_id = normalize_transaction_id(evidence.transaction_id)
             evidence = replace(
                 evidence,
                 email=normalized_email,
+                transaction_id=normalized_transaction_id,
                 currency=evidence.currency.casefold(),
                 payment_method_type=evidence.payment_method_type.casefold(),
             )
@@ -444,7 +700,7 @@ class StripeVerifier:
 
         email_hash = _email_hash(evidence.email)
         evidence_constraint_count = self._evidence_constraint_count(evidence)
-        if not evidence.email and evidence_constraint_count < 2:
+        if not evidence.email and evidence_constraint_count < 2 and not evidence.transaction_id:
             result = StripeVerificationResult(
                 processing_id,
                 "NO_MATCH",
@@ -514,6 +770,51 @@ class StripeVerifier:
                     )
                 ]
 
+            # A screenshot/provider transaction ID is a high-strength lookup
+            # hint. Use it after the normal customer search and its bounded
+            # lookback fallback so a wrong caption email cannot hide the
+            # correct charge. Amount, status, currency, payment method, and
+            # available receipt time/date still have to agree; an ID alone is
+            # never allowed to bypass charge eligibility checks.
+            def transaction_matches_for(candidate_charges: list[dict[str, Any]]) -> list[dict[str, Any]]:
+                return [
+                    charge for charge in candidate_charges
+                    if self._transaction_id_matches(charge, evidence)
+                    and self._matches(
+                        charge,
+                        evidence,
+                        customer_ids,
+                        screenshot_zone or zone,
+                        require_identity=False,
+                        include_time_constraints=True,
+                        match_hour=bool(self.screenshot_timezone),
+                    )
+                ]
+
+            transaction_matches = transaction_matches_for(charges) if evidence.transaction_id else []
+            # A wrong caption may resolve to a real customer with unrelated
+            # charges. Broaden only the identifier search to the bounded
+            # lookback in that case; never let a customer-scoped result hide a
+            # valid exact transaction identifier.
+            if not transaction_matches and evidence.transaction_id and customer_ids and evidence.payment_date is None:
+                charges = await self._charges_for_lookback(client)
+                transaction_matches = transaction_matches_for(charges)
+            transaction_id_match = False
+            if len(transaction_matches) > 1:
+                result = StripeVerificationResult(
+                    processing_id,
+                    "AMBIGUOUS",
+                    "UNCLEAR",
+                    "MULTIPLE_TRANSACTION_ID_MATCHES",
+                    candidate_count=len(transaction_matches),
+                    email_hash=email_hash,
+                )
+                self.audit_logger.log_verification(processing_id, result, safe_details="ambiguous_transaction_id")
+                return result
+            if len(transaction_matches) == 1:
+                matches = transaction_matches
+                transaction_id_match = True
+
             # A syntactically valid caption can still be stale or mistyped.
             # If it produced no match, recover only from at least two
             # independent OCR constraints and only when exactly one eligible
@@ -561,7 +862,7 @@ class StripeVerifier:
                     processing_id,
                     "MATCHED",
                     "VALID",
-                    "IDENTITY_RECOVERED_FROM_STRIPE" if recovered_identity else "EXACT_SINGLE_MATCH" if has_ocr_constraints else "EMAIL_SINGLE_MATCH",
+                    "TRANSACTION_ID_MATCH" if transaction_id_match else "IDENTITY_RECOVERED_FROM_STRIPE" if recovered_identity else "EXACT_SINGLE_MATCH" if has_ocr_constraints else "EMAIL_SINGLE_MATCH",
                     stripe_charge_id=matches[0].get("id"),
                     candidate_count=1,
                     email_hash=email_hash,

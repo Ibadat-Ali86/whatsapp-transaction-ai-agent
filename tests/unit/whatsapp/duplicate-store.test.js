@@ -13,7 +13,7 @@ test('claims exact image hashes and persists records across store instances', ()
   const filePath = temporaryPath();
   const sha256 = 'a'.repeat(64);
   const first = createDuplicateStore({ filePath });
-  const claim = first.claimImage({ sha256, processingId: 'wa-first', groupIdHash: 'group-a' });
+  const claim = first.claimImage({ sha256, processingId: 'wa-first', groupIdHash: 'group-a', groupName: 'Alpha Group' });
   assert.equal(claim.duplicate, false);
   first.registerImageEvidence({ sha256, phash: '0123456789abcdef', processingId: 'wa-first' });
 
@@ -22,6 +22,7 @@ test('claims exact image hashes and persists records across store instances', ()
   assert.equal(duplicate.duplicate, true);
   assert.equal(duplicate.matchType, 'SHA256');
   assert.equal(duplicate.record.processing_id, 'wa-first');
+  assert.equal(duplicate.record.group_name, 'Alpha Group');
   fs.unlinkSync(filePath);
 });
 
@@ -29,7 +30,7 @@ test('recognizes a recompressed image by pHash only with matching identity and a
   const store = createDuplicateStore({ filePath: temporaryPath(), phashMaxDistance: 6 });
   const firstSha = 'b'.repeat(64);
   const secondSha = 'c'.repeat(64);
-  store.claimImage({ sha256: firstSha, processingId: 'wa-first', groupIdHash: 'group-a' });
+  store.claimImage({ sha256: firstSha, processingId: 'wa-first', groupIdHash: 'group-a', groupName: 'Alpha Group' });
   store.registerImageEvidence({
     sha256: firstSha,
     phash: '0000000000000000',
@@ -37,7 +38,7 @@ test('recognizes a recompressed image by pHash only with matching identity and a
     amountCents: 2000,
     processingId: 'wa-first',
   });
-  store.claimImage({ sha256: secondSha, processingId: 'wa-second', groupIdHash: 'group-b' });
+  store.claimImage({ sha256: secondSha, processingId: 'wa-second', groupIdHash: 'group-b', groupName: 'Beta Group' });
   const duplicate = store.registerImageEvidence({
     sha256: secondSha,
     phash: '0000000000000001',

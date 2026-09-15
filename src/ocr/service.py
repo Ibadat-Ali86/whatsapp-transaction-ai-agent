@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import time
 import secrets
 from datetime import date, datetime, timezone
@@ -13,9 +14,51 @@ from src.config.settings import get_settings
 from src.logging.audit import AuditLogger
 from src.utils.image_utils import generate_processing_id, base64_to_bytes, compute_sha256, compute_perceptual_hash
 from src.ocr.engine import OCREngine
-from src.verification.stripe_verifier import PaymentEvidence, StripeVerifier, normalize_email
+from src.verification.stripe_verifier import (
+    PaymentEvidence,
+    StripeVerificationRuntime,
+    StripeVerifier,
+    normalize_email,
+    normalize_transaction_id,
+)
 
 logger = AuditLogger("ocr_service")
+
+_stripe_runtime: Optional[StripeVerificationRuntime] = None
+_stripe_runtime_signature: Optional[tuple[object, ...]] = None
+
+
+def _get_stripe_runtime(settings, secret_key: str) -> StripeVerificationRuntime:
+    """Return shared Stripe controls for this account/configuration.
+
+    The endpoint creates lightweight verifier objects per request, so the
+    runtime must live outside the request handler for caching and throttling
+    to protect all concurrent WhatsApp groups in this service process.
+    """
+    global _stripe_runtime, _stripe_runtime_signature
+
+    cache_ttl_seconds = float(getattr(settings, "STRIPE_CACHE_TTL_SECONDS", 10.0))
+    cache_max_entries = int(getattr(settings, "STRIPE_CACHE_MAX_ENTRIES", 512))
+    requests_per_second = float(getattr(settings, "STRIPE_REQUESTS_PER_SECOND", 20.0))
+    max_concurrent_requests = int(getattr(settings, "STRIPE_MAX_CONCURRENT_REQUESTS", 5))
+    signature = (
+        hashlib.sha256(secret_key.encode("utf-8")).hexdigest()[:16],
+        getattr(settings, "STRIPE_MODE", "test"),
+        getattr(settings, "STRIPE_API_BASE_URL", "https://api.stripe.com"),
+        cache_ttl_seconds,
+        cache_max_entries,
+        requests_per_second,
+        max_concurrent_requests,
+    )
+    if _stripe_runtime is None or _stripe_runtime_signature != signature:
+        _stripe_runtime = StripeVerificationRuntime(
+            cache_ttl_seconds=cache_ttl_seconds,
+            cache_max_entries=cache_max_entries,
+            requests_per_second=requests_per_second,
+            max_concurrent_requests=max_concurrent_requests,
+        )
+        _stripe_runtime_signature = signature
+    return _stripe_runtime
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -38,6 +81,7 @@ class OCRRequest(BaseModel):
 class StripeVerificationRequest(BaseModel):
     processing_id: str = Field(..., min_length=1, max_length=128)
     email: Optional[str] = Field(default=None, min_length=3, max_length=512)
+    transaction_id: Optional[str] = Field(default=None, min_length=4, max_length=128)
     amount_cents: Optional[int] = Field(default=None, gt=0, le=100_000_000)
     payment_date: Optional[date] = None
     minutes: Optional[int] = Field(default=None, ge=0, le=59)
@@ -53,6 +97,13 @@ class StripeVerificationRequest(BaseModel):
         if value is None or not value.strip():
             return None
         return normalize_email(value)
+
+    @field_validator("transaction_id")
+    @classmethod
+    def normalize_transaction_id(cls, value: Optional[str]) -> Optional[str]:
+        if value is None or not value.strip():
+            return None
+        return normalize_transaction_id(value)
 
     @field_validator("currency")
     @classmethod
@@ -129,6 +180,7 @@ async def process_ocr(request: OCRRequest):
     if result.fields:
         fields_dict = {
             "email": result.fields.email,
+            "transaction_id": result.fields.transaction_id,
             "amount_cents": result.fields.amount_cents,
             "minutes": result.fields.minutes,
             "payment_hour": result.fields.payment_hour,
@@ -172,8 +224,9 @@ async def verify_stripe(
     if not internal_service_token or not secrets.compare_digest(internal_service_token, configured_service_token):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
+    secret_key = settings.STRIPE_SECRET_KEY.get_secret_value()
     verifier = StripeVerifier(
-        settings.STRIPE_SECRET_KEY.get_secret_value(),
+        secret_key,
         mode=settings.STRIPE_MODE,
         base_url=settings.STRIPE_API_BASE_URL,
         api_version=settings.STRIPE_API_VERSION,
@@ -183,9 +236,18 @@ async def verify_stripe(
         max_pages=settings.STRIPE_MAX_PAGES,
         lookback_days=settings.STRIPE_LOOKBACK_DAYS,
         allowed_payment_method_type=settings.STRIPE_ALLOWED_PAYMENT_METHOD_TYPE,
+        cache_ttl_seconds=float(getattr(settings, "STRIPE_CACHE_TTL_SECONDS", 10.0)),
+        cache_max_entries=int(getattr(settings, "STRIPE_CACHE_MAX_ENTRIES", 512)),
+        requests_per_second=float(getattr(settings, "STRIPE_REQUESTS_PER_SECOND", 20.0)),
+        max_concurrent_requests=int(getattr(settings, "STRIPE_MAX_CONCURRENT_REQUESTS", 5)),
+        retry_attempts=int(getattr(settings, "STRIPE_RETRY_ATTEMPTS", 2)),
+        backoff_base_seconds=float(getattr(settings, "STRIPE_BACKOFF_BASE_SECONDS", 0.5)),
+        backoff_max_seconds=float(getattr(settings, "STRIPE_BACKOFF_MAX_SECONDS", 8.0)),
+        runtime=_get_stripe_runtime(settings, secret_key),
     )
     evidence = PaymentEvidence(
         email=request.email,
+        transaction_id=request.transaction_id,
         amount_cents=request.amount_cents,
         payment_date=request.payment_date,
         minutes=request.minutes,

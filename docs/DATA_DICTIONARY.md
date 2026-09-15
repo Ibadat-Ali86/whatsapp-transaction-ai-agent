@@ -32,6 +32,12 @@ Stripe lookup identity; it is still user-supplied input and not payment proof.
 email
 Normalized email extracted from screenshot.
 
+transaction_id
+Payment/provider identifier extracted next to an explicit transaction or
+payment identifier label. It is an exact lookup hint and is compared against
+the Stripe charge ID, payment intent, balance transaction, source, supported
+Cash App fields, and approved transaction metadata keys.
+
 amount_cents
 Integer monetary amount in cents.
 

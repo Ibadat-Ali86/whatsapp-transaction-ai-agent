@@ -123,3 +123,14 @@ test('formats a concise duplicate justification with group scope', () => {
   assert.match(reply, /Original Processing ID: wa-original/);
   assert.doesNotMatch(reply, /Stripe Verification/);
 });
+
+test('names the original group for a same-group duplicate', () => {
+  const reply = formatDuplicateReply({
+    verification: {
+      reason_code: 'DUPLICATE_IMAGE_SHA256',
+      duplicate_of_processing_id: 'wa-original',
+    },
+  }, 'wa-duplicate', { groupScope: 'same_group', originalGroupName: 'Operations Review' });
+
+  assert.match(reply, /already processed in the same group "Operations Review"/);
+});

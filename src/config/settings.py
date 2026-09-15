@@ -29,6 +29,15 @@ class Settings(BaseSettings):
     STRIPE_MAX_PAGES: int = 10
     STRIPE_LOOKBACK_DAYS: int = 90
     STRIPE_ALLOWED_PAYMENT_METHOD_TYPE: str = 'cashapp'
+    # Stripe controls are deliberately conservative; these apply globally to
+    # concurrent verification requests handled by this OCR-service process.
+    STRIPE_CACHE_TTL_SECONDS: float = 10.0
+    STRIPE_CACHE_MAX_ENTRIES: int = 512
+    STRIPE_REQUESTS_PER_SECOND: float = 20.0
+    STRIPE_MAX_CONCURRENT_REQUESTS: int = 5
+    STRIPE_RETRY_ATTEMPTS: int = 2
+    STRIPE_BACKOFF_BASE_SECONDS: float = 0.5
+    STRIPE_BACKOFF_MAX_SECONDS: float = 8.0
 
     model_config = SettingsConfigDict(env_file='.env', env_file_encoding='utf-8', extra='ignore')
 

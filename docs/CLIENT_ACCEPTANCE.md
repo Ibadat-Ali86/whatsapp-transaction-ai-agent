@@ -5,6 +5,8 @@
 - OCR extracts required fields reliably.
 - Duplicate images are detected.
 - Duplicate transactions are detected.
+- Same-amount/same-time payments are disambiguated by an exact transaction
+  identifier when Stripe exposes that identifier.
 - Stripe verification is correct.
 - Verdicts are understandable.
 - Google Sheets records are complete.
@@ -22,6 +24,8 @@ Do not use arbitrary claims such as "99% accurate" without measured evidence.
 - controlled Google access;
 - controlled Telegram access;
 - documented cloud AI data flow.
+- live-mode verification is approved only after a restricted read-only key,
+  key-access controls, and a test plan are reviewed.
 
 ## Reliability
 - reconnect behavior tested;

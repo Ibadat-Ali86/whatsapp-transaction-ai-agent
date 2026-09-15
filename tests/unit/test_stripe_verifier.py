@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 
 import httpx
@@ -244,6 +245,64 @@ async def test_wrong_caption_can_recover_only_one_charge_from_two_ocr_constraint
 
 
 @pytest.mark.asyncio
+async def test_transaction_id_recovers_charge_when_caption_email_is_wrong():
+    def responses(request):
+        if request.url.path == "/v1/customers":
+            return httpx.Response(200, json={"data": [], "has_more": False})
+        assert request.url.path == "/v1/charges"
+        return httpx.Response(200, json={
+            "data": [charge(
+                "ch_transaction_id",
+                customer=None,
+                receipt_email="actual@example.com",
+                metadata={"payment_identifier": "FQ2JKTVZ0"},
+            )],
+            "has_more": False,
+        })
+
+    result, _ = await verify_with_responses(
+        responses,
+        evidence_value=evidence(email="wrong@example.com", transaction_id="FQ2JKTVZ0"),
+    )
+
+    assert result.status == "MATCHED"
+    assert result.verdict == "VALID"
+    assert result.reason_code == "TRANSACTION_ID_MATCH"
+    assert result.stripe_charge_id == "ch_transaction_id"
+    assert result.matched_transaction["customer_email"] == "actual@example.com"
+
+
+@pytest.mark.asyncio
+async def test_transaction_id_disambiguates_same_amount_and_time_charges():
+    def responses(request):
+        assert request.url.path == "/v1/charges"
+        return httpx.Response(200, json={
+            "data": [
+                charge("ch_first", customer=None, receipt_email="first@example.com", metadata={"transaction_id": "FIRST123"}),
+                charge("ch_second", customer=None, receipt_email="second@example.com", metadata={"transaction_id": "SECOND123"}),
+            ],
+            "has_more": False,
+        })
+
+    result, _ = await verify_with_responses(
+        responses,
+        evidence_value=PaymentEvidence(
+            email=None,
+            transaction_id="SECOND123",
+            amount_cents=2500,
+            payment_date=datetime(2026, 9, 9, tzinfo=timezone.utc).date(),
+            minutes=31,
+        ),
+    )
+
+    assert result.status == "MATCHED"
+    assert result.verdict == "VALID"
+    assert result.reason_code == "TRANSACTION_ID_MATCH"
+    assert result.stripe_charge_id == "ch_second"
+    assert result.matched_transaction["customer_email"] == "second@example.com"
+
+
+@pytest.mark.asyncio
 async def test_captionless_lookup_with_one_constraint_is_unclear_without_network_call():
     result, requests = await verify_with_responses(
         lambda _request: httpx.Response(500),
@@ -325,6 +384,92 @@ async def test_follows_charge_pagination():
     assert result.verdict == "VALID"
     assert result.stripe_charge_id == "ch_page_two"
     assert len(requests) == 3
+
+
+@pytest.mark.asyncio
+async def test_retries_transient_stripe_rate_limit_then_matches():
+    charge_attempts = 0
+
+    def responses(request):
+        nonlocal charge_attempts
+        if request.url.path == "/v1/customers":
+            return httpx.Response(200, json={"data": [{"id": "cus_customer", "email": "customer@example.com"}]})
+        assert request.url.path == "/v1/charges"
+        charge_attempts += 1
+        if charge_attempts == 1:
+            return httpx.Response(429, headers={"Retry-After": "0"}, json={"error": {"type": "rate_limit_error"}})
+        return httpx.Response(200, json={"data": [charge()], "has_more": False})
+
+    result, requests = await verify_with_responses(
+        responses,
+        requests_per_second=0,
+        retry_attempts=2,
+        backoff_base_seconds=0,
+        backoff_max_seconds=0,
+    )
+
+    assert result.verdict == "VALID"
+    assert result.reason_code == "EXACT_SINGLE_MATCH"
+    assert len(requests) == 3
+
+
+@pytest.mark.asyncio
+async def test_reuses_short_lived_cache_across_verifications():
+    requests = []
+
+    async def handler(request):
+        requests.append(request)
+        if request.url.path == "/v1/customers":
+            return httpx.Response(200, json={"data": [{"id": "cus_customer", "email": "customer@example.com"}]})
+        assert request.url.path == "/v1/charges"
+        return httpx.Response(200, json={"data": [charge()], "has_more": False})
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        verifier = StripeVerifier(
+            "sk_test_unit_test_key",
+            http_client=client,
+            timezone_name="UTC",
+            requests_per_second=0,
+        )
+        first = await verifier.verify(evidence(), "wa-cache-first")
+        second = await verifier.verify(evidence(), "wa-cache-second")
+
+    assert first.verdict == "VALID"
+    assert second.verdict == "VALID"
+    assert len(requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_shared_runtime_limits_concurrent_stripe_requests():
+    active = 0
+    maximum_active = 0
+
+    async def handler(_request):
+        nonlocal active, maximum_active
+        active += 1
+        maximum_active = max(maximum_active, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+        return httpx.Response(200, json={"data": [], "has_more": False})
+
+    from src.verification.stripe_verifier import StripeVerificationRuntime
+
+    runtime = StripeVerificationRuntime(requests_per_second=0, max_concurrent_requests=1)
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        verifier = StripeVerifier(
+            "sk_test_unit_test_key",
+            http_client=client,
+            runtime=runtime,
+            requests_per_second=0,
+        )
+        await asyncio.gather(
+            verifier._get(client, "/v1/charges", {"query": "one"}),
+            verifier._get(client, "/v1/charges", {"query": "two"}),
+        )
+
+    assert maximum_active == 1
 
 
 @pytest.mark.asyncio

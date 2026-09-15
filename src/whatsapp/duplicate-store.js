@@ -74,7 +74,7 @@ function createDuplicateStore({
   load();
 
   return {
-    claimImage({ sha256, processingId, groupIdHash, captionEmail, amountCents }) {
+    claimImage({ sha256, processingId, groupIdHash, groupName, captionEmail, amountCents }) {
       if (!/^[0-9a-f]{64}$/i.test(sha256 || '')) throw new Error('Invalid image SHA-256');
       prune();
       const existing = state.images[sha256];
@@ -83,6 +83,7 @@ function createDuplicateStore({
       const record = {
         processing_id: processingId,
         group_id_hash: groupIdHash,
+        group_name: typeof groupName === 'string' ? groupName : null,
         first_seen_at: Date.now(),
         email_hash: captionEmail ? emailHash(captionEmail) : null,
         amount_cents: Number.isInteger(amountCents) ? amountCents : null,
@@ -127,7 +128,7 @@ function createDuplicateStore({
       }
     },
 
-    claimTransaction(transactionKey, { processingId, groupIdHash }) {
+    claimTransaction(transactionKey, { processingId, groupIdHash, groupName }) {
       if (typeof transactionKey !== 'string' || transactionKey.length < 1) {
         throw new Error('Invalid transaction key');
       }
@@ -137,6 +138,7 @@ function createDuplicateStore({
       const record = {
         processing_id: processingId,
         group_id_hash: groupIdHash,
+        group_name: typeof groupName === 'string' ? groupName : null,
         first_seen_at: Date.now(),
       };
       state.transactions[transactionKey] = record;

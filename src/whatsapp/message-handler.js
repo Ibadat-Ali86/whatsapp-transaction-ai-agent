@@ -27,6 +27,22 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
     ttlMs: (config.DUPLICATE_RETENTION_DAYS || 90) * 24 * 60 * 60 * 1000,
     phashMaxDistance: config.DUPLICATE_PHASH_MAX_DISTANCE || 6,
   });
+  const groupNameCache = new Map();
+  const resolveGroupName = dependencies.getGroupName || (async groupId => {
+    if (!groupId) return null;
+    if (groupNameCache.has(groupId)) return groupNameCache.get(groupId);
+    try {
+      const metadata = await sock.groupMetadata(groupId);
+      const subject = typeof metadata?.subject === 'string' ? metadata.subject.trim() : '';
+      const groupName = subject ? subject.replace(/\s+/g, ' ').slice(0, 120) : null;
+      groupNameCache.set(groupId, groupName);
+      return groupName;
+    } catch (error) {
+      logger.debug({ groupIdHash: hashGroupJid(groupId), err: error }, 'Unable to resolve WhatsApp group name for duplicate provenance');
+      groupNameCache.set(groupId, null);
+      return null;
+    }
+  });
   const groupHash = groupId => hashGroupJid(groupId);
   const sendReaction = async (groupId, msg, text) => {
     if (config.BOT_REACTIONS_ENABLED === false) return;
@@ -58,6 +74,7 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
 
         const caption = getImageCaption(msg);
         const captionEmail = normalizeCaptionEmail(caption);
+        const groupName = await resolveGroupName(groupId);
         if (!captionEmail) logger.info({ messageId, groupIdHash: groupHash(groupId) }, 'No valid caption email; continuing with OCR and Stripe evidence recovery');
 
         const processingId = generateProcessingId();
@@ -82,6 +99,7 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
             sha256: imageHash,
             processingId,
             groupIdHash: hashGroupJid(groupId),
+            groupName,
             captionEmail,
           });
           if (imageClaim.duplicate) {
@@ -99,7 +117,10 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
             };
             if (config.BOT_REPLY_ENABLED) {
               await sock.sendMessage(groupId, {
-                text: formatDuplicateReply(duplicateResult, processingId, { groupScope: duplicateScope(imageClaim.record, groupId) }),
+                text: formatDuplicateReply(duplicateResult, processingId, {
+                  groupScope: duplicateScope(imageClaim.record, groupId),
+                  originalGroupName: imageClaim.record.group_name,
+                }),
               }, { quoted: msg });
             }
             logger.info({ processingId, groupIdHash: hashGroupJid(groupId), matchType: imageClaim.matchType }, 'Duplicate image detected');
@@ -158,6 +179,7 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
                 reason_code: `DUPLICATE_IMAGE_${imageEvidence.matchType}`,
                 duplicate_of_processing_id: imageEvidence.record.processing_id,
                 duplicate_scope: duplicateScope(imageEvidence.record, groupId),
+                duplicate_group_name: imageEvidence.record.group_name,
               },
             };
           } else if (ocrResult?.verification?.verdict === 'VALID' && ocrResult.verification.stripe_charge_id) {
@@ -165,6 +187,7 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
             const transactionClaim = duplicateStore.claimTransaction(transactionKey, {
               processingId,
               groupIdHash: hashGroupJid(groupId),
+              groupName,
             });
             if (transactionClaim.duplicate) {
               finalResult = {
@@ -176,6 +199,7 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
                   reason_code: 'DUPLICATE_STRIPE_TRANSACTION',
                   duplicate_of_processing_id: transactionClaim.record.processing_id,
                   duplicate_scope: duplicateScope(transactionClaim.record, groupId),
+                  duplicate_group_name: transactionClaim.record.group_name,
                 },
               };
             }
@@ -184,7 +208,10 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
           if (finalResult?.verification?.verdict === 'DUPLICATE') {
             if (config.BOT_REPLY_ENABLED) {
               await sock.sendMessage(groupId, {
-                text: formatDuplicateReply(finalResult, processingId, { groupScope: finalResult.verification.duplicate_scope }),
+                text: formatDuplicateReply(finalResult, processingId, {
+                  groupScope: finalResult.verification.duplicate_scope,
+                  originalGroupName: finalResult.verification.duplicate_group_name,
+                }),
               }, { quoted: msg });
             }
           } else if (finalResult?.verification?.verdict === 'VALID' && !captionEmail) {
@@ -198,7 +225,12 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
             }
             await sendReaction(groupId, msg, '✅');
           } else {
-            await sendReaction(groupId, msg, finalResult?.verification?.verdict === 'VALID' ? '✅' : '❌');
+            const verdict = finalResult?.verification?.verdict;
+            await sendReaction(
+              groupId,
+              msg,
+              verdict === 'VALID' ? '✅' : verdict === 'UNCLEAR' || !verdict ? '⚠️' : '❌',
+            );
           }
           
           logger.info({ processingId, duration_ms: Date.now() - startTime, verdict: 'success' }, 'Message processing complete');

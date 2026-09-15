@@ -6,6 +6,7 @@ from decimal import Decimal
 @dataclass
 class ExtractedFields:
     email: Optional[str] = None
+    transaction_id: Optional[str] = None
     amount_cents: Optional[int] = None
     minutes: Optional[str] = None
     payment_hour: Optional[int] = None
@@ -35,6 +36,19 @@ class FieldExtractor:
         email_match = re.search(r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}', raw_text)
         if email_match:
             fields.email = email_match.group(0)
+
+        # Payment screenshots commonly label the provider reference as
+        # "Payment identifier". Only read an identifier next to an explicit
+        # payment/transaction label; never treat an arbitrary OCR token as a
+        # transaction ID.
+        transaction_match = re.search(
+            r'\b(?:payment\s+(?:identifier|id)|transaction\s+(?:identifier|id))\b'
+            r'\s*[:#=-]?\s*([A-Za-z0-9][A-Za-z0-9_-]{3,127})',
+            raw_text,
+            re.IGNORECASE,
+        )
+        if transaction_match:
+            fields.transaction_id = transaction_match.group(1)
             
         # Amount
         amount_match = re.search(r'\$\s*(\d+(?:\.\d{2})?)', raw_text)
@@ -112,6 +126,11 @@ class FieldExtractor:
         fields = ExtractedFields()
         
         fields.email = ai_json.get('email')
+        transaction_id = ai_json.get('transaction_id') or ai_json.get('payment_identifier')
+        if transaction_id is not None:
+            normalized_transaction_id = str(transaction_id).strip()
+            if 4 <= len(normalized_transaction_id) <= 128:
+                fields.transaction_id = normalized_transaction_id
         
         amount_str = ai_json.get('amount')
         if amount_str:

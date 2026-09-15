@@ -38,10 +38,15 @@ Phase 2 Step 1 contract:
   the group can audit the recovered identity. Captioned valid results remain
   reaction-only; duplicate results retain their explanatory text reply.
 - The v2 export routes caption/OCR identity plus deterministic amount/date/time
-  evidence to the internal Stripe verifier when `stripe_verification_enabled`
-  is true. Stripe remains the canonical source for amount, date, time, name,
-  customer email, and status. A missing/stale caption can recover the email
-  only from one unambiguous eligible charge; otherwise the verdict is UNCLEAR.
+  evidence and an exact OCR payment identifier to the internal Stripe verifier
+  when `stripe_verification_enabled` is true. Stripe remains the canonical
+  source for amount, date, time, name, customer email, and status. A
+  missing/stale caption can recover the email from one unambiguous eligible
+  charge. An exact transaction identifier can disambiguate simultaneous
+  same-amount payments and recover from a wrong caption email. Identifier
+  collisions remain UNCLEAR; if OCR produces an identifier that does not
+  resolve, the verifier falls back to the normal safe email/evidence path
+  rather than treating the OCR hint alone as a rejection.
   Textual receipt dates such as `Aug 14` are sent as `payment_month` and
   `payment_day`. For multi-group operation, leave
   `STRIPE_SCREENSHOT_TIMEZONE` empty so receipt hours from different local

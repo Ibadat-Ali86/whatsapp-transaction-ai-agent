@@ -22,17 +22,24 @@ new message
 succeeded charge. `DUPLICATE` is a non-approving verdict and includes the first
 processing ID for audit correlation.
 
-The WhatsApp adapter reacts with `✅` for a clear valid result and `❌` for a
-failed or unclear result. It sends text only for duplicates, including whether
-the original was found in the same group or another allowlisted group and the
-original processing ID.
+The WhatsApp adapter reacts with `✅` for a clear valid result, `❌` for a
+confirmed failure, and `⚠️` for an unclear result. It sends text only for
+duplicates, including whether
+the original was found in the same group or a named other allowlisted group
+when WhatsApp metadata is available, plus the original processing ID and
+detection proof.
+
+Deleting the original WhatsApp message does not release its claim. This is
+intentional: deletion is not evidence that a payment should be reprocessed.
+An authorized operational reset or correction workflow is required for an
+intentional re-review.
 
 ## Stored metadata
 
 The local store contains SHA-256, pHash, one-way caption-email hash, amount,
-processing ID, group hash, and timestamps. It does not contain raw images,
-Stripe secrets, or complete email addresses. Records expire according to
-`DUPLICATE_RETENTION_DAYS`.
+processing ID, group hash, a sanitized group-name snapshot, and timestamps.
+It does not contain raw images, Stripe secrets, or complete email addresses.
+Records expire according to `DUPLICATE_RETENTION_DAYS`.
 
 ## Production boundary
 

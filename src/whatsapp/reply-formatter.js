@@ -86,9 +86,17 @@ function formatOcrReply(ocrResult, processingId, captionEmail = null) {
  * Formats the only text response intentionally sent by the new reaction-first
  * contract: a duplicate explanation with enough provenance for review.
  */
-function formatDuplicateReply(ocrResult, processingId, { groupScope = null } = {}) {
+function formatDuplicateReply(ocrResult, processingId, { groupScope = null, originalGroupName = null } = {}) {
   const verification = ocrResult?.verification || {};
-  const scope = groupScope === 'same_group' ? 'the same group' : groupScope === 'another_group' ? 'another group' : 'this WhatsApp workspace';
+  const normalizedGroupName = typeof originalGroupName === 'string'
+    ? originalGroupName.replace(/\s+/g, ' ').trim().slice(0, 120)
+    : '';
+  const namedScope = normalizedGroupName ? `group "${normalizedGroupName}"` : null;
+  const scope = groupScope === 'same_group'
+    ? namedScope ? `the same ${namedScope}` : 'the same group'
+    : groupScope === 'another_group'
+      ? namedScope ? `the ${namedScope}` : 'another group'
+      : namedScope || 'this WhatsApp workspace';
   const reason = verification.reason_code || 'DUPLICATE_DETECTED';
   const originalId = verification.duplicate_of_processing_id || 'previous processing';
   const reasonText = reason === 'DUPLICATE_STRIPE_TRANSACTION'

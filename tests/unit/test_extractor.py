@@ -38,6 +38,21 @@ class TestEmailExtraction:
         fields = FieldExtractor.extract_from_text(text, "test-pid-004")
         assert fields.email is None
 
+
+class TestTransactionIdExtraction:
+
+    def test_extracts_labeled_payment_identifier(self):
+        fields = FieldExtractor.extract_from_text(
+            "Payment identifier\nFQ2JKTVZ0\nAmount: $20.00", "test-pid-006"
+        )
+        assert fields.transaction_id == "FQ2JKTVZ0"
+
+    def test_ignores_unlabeled_reference_like_text(self):
+        fields = FieldExtractor.extract_from_text(
+            "Reference FQ2JKTVZ0\nAmount: $20.00", "test-pid-007"
+        )
+        assert fields.transaction_id is None
+
     def test_email_with_numbers(self):
         text = "john123@domain456.com sent payment"
         fields = FieldExtractor.extract_from_text(text, "test-pid-005")
@@ -233,6 +248,7 @@ class TestAIResponseParsing:
     def test_parses_full_ai_response(self):
         ai_json = {
             "email": "user@example.com",
+            "transaction_id": "FQ2JKTVZ0",
             "amount": "$25.00",
             "minutes": "31",
             "payment_hour": "9",
@@ -244,6 +260,7 @@ class TestAIResponseParsing:
         }
         fields = FieldExtractor.extract_from_ai_response(ai_json, "test-pid-050")
         assert fields.email == "user@example.com"
+        assert fields.transaction_id == "FQ2JKTVZ0"
         assert fields.amount_cents == 2500
         assert isinstance(fields.amount_cents, int)
         assert fields.minutes == "31"

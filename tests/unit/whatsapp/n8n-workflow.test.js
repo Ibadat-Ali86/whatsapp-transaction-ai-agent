@@ -116,6 +116,7 @@ test('n8n v2 code nodes validate optional captions and prepare recoverable Strip
     confidence: 1,
     fields: {
       email: 'different@example.com',
+      transaction_id: 'FQ2JKTVZ0',
       amount_cents: 2500,
       minutes: '31',
       payment_date: '2026-09-09',
@@ -123,6 +124,7 @@ test('n8n v2 code nodes validate optional captions and prepare recoverable Strip
   }, { references: { 'Validate Event': validated } })[0].json;
   assert.equal(ocrEmailDiffers.ready_for_stripe, true);
   assert.equal(ocrEmailDiffers.stripe_request.email, 'customer@example.com');
+  assert.equal(ocrEmailDiffers.stripe_request.transaction_id, 'FQ2JKTVZ0');
 
   const ready = executeCodeNode(prepare, {
     confidence: 1,
@@ -135,6 +137,7 @@ test('n8n v2 code nodes validate optional captions and prepare recoverable Strip
   }, { references: { 'Validate Event': validated } })[0].json;
   assert.equal(ready.ready_for_stripe, true);
   assert.equal(ready.stripe_request.email, 'customer@example.com');
+  assert.equal(ready.stripe_request.transaction_id, null);
   assert.equal(ready.stripe_request.amount_cents, 2500);
 
   const lowConfidence = executeCodeNode(prepare, {
