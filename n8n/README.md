@@ -21,6 +21,10 @@ authenticated OCR, duplicate, invalid-token, invalid-caption, caption-driven
 Stripe lookup, and receipt-email fallback checks; live WhatsApp and Stripe
 fixtures are still required before production activation.
 
+For the single-Droplet Compose deployment, import
+`workflows/whatsapp-screenshot-processor_v2_docker_20260915.json`. It targets
+the private Docker service name `ocr:8000` instead of `localhost:8000`.
+
 For a repeatable local adapter check, start the OCR service and imported n8n
 workflow, then run `N8N_BASE_URL=http://127.0.0.1:5678
 N8N_WEBHOOK_TOKEN="$N8N_WEBHOOK_TOKEN" npm run smoke:n8n`. This uses the

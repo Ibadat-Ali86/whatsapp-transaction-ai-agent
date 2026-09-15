@@ -1,0 +1,95 @@
+services:
+  ocr:
+    build:
+      context: .
+      dockerfile: Dockerfile.ocr
+    env_file:
+      - ./deploy/env/ocr.env
+    environment:
+      OCR_SERVICE_HOST: 0.0.0.0
+      OCR_SERVICE_PORT: 8000
+      TEMP_DIR: /srv/tmp
+    expose:
+      - "8000"
+    volumes:
+      - ocr_tmp:/srv/tmp
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  n8n:
+    image: n8nio/n8n:1.100.1
+    env_file:
+      - ./deploy/env/n8n.env
+    environment:
+      N8N_HOST: 0.0.0.0
+      N8N_PORT: 5678
+      N8N_PROTOCOL: http
+      N8N_USER_FOLDER: /home/node/.n8n
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_PERSONALIZATION_ENABLED: "false"
+      EXECUTIONS_DATA_SAVE_ON_SUCCESS: none
+      EXECUTIONS_DATA_SAVE_ON_ERROR: none
+      EXECUTIONS_DATA_PRUNE: "true"
+    ports:
+      - "127.0.0.1:5678:5678"
+    volumes:
+      - n8n_data:/home/node/.n8n
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:5678/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile.bot
+    env_file:
+      - ./deploy/env/bot.env
+    environment:
+      OCR_SERVICE_URL: http://ocr:8000
+      N8N_BASE_URL: http://n8n:5678
+      AUTH_DIR: /app/auth
+      TEMP_DIR: /app/tmp
+      DUPLICATE_STORE_PATH: /app/data/duplicate-store.json
+      PROCESSING_QUEUE_PATH: /app/data/processing-queue.json
+      N8N_ENABLED: "true"
+    depends_on:
+      ocr:
+        condition: service_healthy
+      n8n:
+        condition: service_healthy
+    volumes:
+      - bot_auth:/app/auth
+      - bot_data:/app/data
+      - bot_tmp:/app/tmp
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+volumes:
+  bot_auth:
+  bot_data:
+  bot_tmp:
+  n8n_data:
+  ocr_tmp:

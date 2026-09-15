@@ -73,5 +73,9 @@ Stripe test fixtures remain controlled follow-ups.
 - [ ] privacy review
 - [ ] failure testing
 - [ ] local acceptance
-- [ ] deployment plan
+- [x] deployment plan
+- [x] production Dockerfiles and Compose manifest added
+- [x] secret-separated deployment environment templates added
+- [x] Docker-specific n8n workflow export added
+- [ ] Docker config/build smoke test on deployment host
 - [ ] DigitalOcean approved

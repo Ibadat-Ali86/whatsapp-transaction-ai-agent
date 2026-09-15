@@ -68,6 +68,15 @@ test('n8n v1 rollback workflow also bounds image input and disables retention', 
   assert.equal(workflow.settings.saveDataSuccessExecution, 'none');
 });
 
+test('Docker production workflow targets the private OCR service name', () => {
+  const workflow = loadWorkflow('whatsapp-screenshot-processor_v2_docker_20260915.json');
+  const serialized = JSON.stringify(workflow);
+  assert.match(serialized, /http:\/\/ocr:8000\/api\/v1\/ocr\/process/);
+  assert.match(serialized, /http:\/\/ocr:8000\/api\/v1\/verification\/stripe/);
+  assert.doesNotMatch(serialized, /http:\/\/localhost:8000/);
+  assert.doesNotMatch(serialized, /sk_(live|test)_[A-Za-z0-9]+/);
+});
+
 test('n8n v2 code nodes validate optional captions and prepare recoverable Stripe evidence', () => {
   const workflow = loadWorkflow('whatsapp-screenshot-processor_v2_20260910.json');
   const validate = nodeByName(workflow, 'Validate Event');
