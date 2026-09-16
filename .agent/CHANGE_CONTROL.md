@@ -73,6 +73,27 @@ Per `docs/CHANGE_CONTROL.md`, agents must **never**:
 
 <!-- Append new change records below this line. Most recent first. -->
 
+### CC-0007 — Mistyped Caption Recovery and Explicit Non-Approval Reactions
+
+| Field              | Value |
+|--------------------|-------|
+| **ID**             | CC-0007 |
+| **Date**           | 2026-09-16 |
+| **Class**          | C2 |
+| **Agent**          | Codex |
+| **Requested by**   | Project owner |
+| **Phase**          | Phase 2 |
+| **Reason**         | Recover valid Stripe payments when a WhatsApp caption email is mistyped, and remove ambiguous payment reactions. |
+| **Requirement**    | Stripe-authoritative verification; valid, invalid, unresolved, and duplicate outcome handling |
+| **Files changed**  | `src/verification/stripe_verifier.py`, `src/ocr/service.py`, `src/whatsapp/message-handler.js`, `src/whatsapp/reply-formatter.js`, `scripts/smoke_n8n_adapter.js`, both v2 n8n workflow exports, related unit tests, and verification documentation |
+| **Behavior changed** | Caption and OCR-visible emails are preserved as separate candidates; Stripe can recover the canonical customer identity for a unique eligible charge. `✅` is reserved for confirmed valid matches; non-duplicate non-valid outcomes use `❌` with a professional justification. |
+| **Security impact** | Read-only Stripe access is unchanged; no secrets or payment payloads are logged or added to workflow exports. |
+| **Data impact**    | None; runtime duplicate data is not modified by this change. |
+| **Tests run**      | `.venv/bin/python -m pytest -q` (118 passed); `npm run test:whatsapp` (49 passed); `npm run smoke:n8n` (passed); Node syntax checks, Pydantic contract smoke test, workflow JSON validation, and `git diff --check` (passed). |
+| **Rollback**       | Revert CC-0007 changes and re-import the prior v2 workflow export. |
+| **Documentation updated** | Yes — `docs/ENVIRONMENT.md`, `docs/N8N_WORKFLOW_SPEC.md`, `docs/PHASE_2_ANALYSIS.md`, `docs/PHASE_3_DUPLICATE_DETECTION.md`, `docs/TECHNICAL_SPEC.md` |
+| **Status**         | COMPLETE |
+
 ### CC-0006 — Baileys Session Conflict Protection
 
 | Field              | Value |

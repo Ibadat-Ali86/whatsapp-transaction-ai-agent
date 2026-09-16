@@ -1,6 +1,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { formatOcrReply, formatDuplicateReply } = require('../../../src/whatsapp/reply-formatter');
+const {
+  formatOcrReply,
+  formatDuplicateReply,
+  formatVerificationFailureReply,
+} = require('../../../src/whatsapp/reply-formatter');
 
 test('formats the OCR service fields response shape', () => {
   const reply = formatOcrReply({
@@ -94,6 +98,24 @@ test('formats duplicate and unclear screenshot statuses safely', () => {
     verification: { verdict: 'UNCLEAR', reason_code: 'NO_EXACT_MATCH' },
   }, 'wa-unclear', 'customer@example.com');
   assert.match(unclear, /Screenshot Status: UNCLEAR \/ NOT CONFIRMED/);
+  assert.match(unclear, /❌ Stripe Verification: UNCLEAR/);
+  assert.doesNotMatch(unclear, /⚠️ Screenshot Status/);
+});
+
+test('formats a non-confirmed payment with a cross justification', () => {
+  const reply = formatVerificationFailureReply({
+    verification: {
+      verdict: 'UNCLEAR',
+      reason_code: 'MULTIPLE_EXACT_MATCHES',
+      candidate_count: 2,
+    },
+  }, 'wa-unconfirmed');
+
+  assert.match(reply, /❌ \*Payment Not Confirmed\*/);
+  assert.match(reply, /multiple eligible payments/);
+  assert.match(reply, /Verification reason: MULTIPLE_EXACT_MATCHES/);
+  assert.match(reply, /Stripe candidates reviewed: 2/);
+  assert.doesNotMatch(reply, /⚠️/);
 });
 
 test('makes local OCR fallback visible without exposing provider details', () => {

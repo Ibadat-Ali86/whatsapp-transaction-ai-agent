@@ -81,6 +81,7 @@ class OCRRequest(BaseModel):
 class StripeVerificationRequest(BaseModel):
     processing_id: str = Field(..., min_length=1, max_length=128)
     email: Optional[str] = Field(default=None, min_length=3, max_length=512)
+    email_candidates: list[str] = Field(default_factory=list, max_length=8)
     transaction_id: Optional[str] = Field(default=None, min_length=4, max_length=128)
     amount_cents: Optional[int] = Field(default=None, gt=0, le=100_000_000)
     payment_date: Optional[date] = None
@@ -97,6 +98,23 @@ class StripeVerificationRequest(BaseModel):
         if value is None or not value.strip():
             return None
         return normalize_email(value)
+
+    @field_validator("email_candidates")
+    @classmethod
+    def normalize_email_candidates(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for candidate in value:
+            if not isinstance(candidate, str) or not candidate.strip():
+                continue
+            try:
+                email = normalize_email(candidate)
+            except ValueError:
+                # One malformed OCR candidate must not discard a valid
+                # caption or another valid candidate from the same receipt.
+                continue
+            if email not in normalized:
+                normalized.append(email)
+        return normalized
 
     @field_validator("transaction_id")
     @classmethod
@@ -247,6 +265,7 @@ async def verify_stripe(
     )
     evidence = PaymentEvidence(
         email=request.email,
+        email_candidates=tuple(request.email_candidates),
         transaction_id=request.transaction_id,
         amount_cents=request.amount_cents,
         payment_date=request.payment_date,

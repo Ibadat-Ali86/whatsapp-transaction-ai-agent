@@ -34,15 +34,22 @@ v2 n8n workflow should call Stripe. It defaults to false and does not expose
 the Stripe secret.
 
 `BOT_REACTIONS_ENABLED=true` enables reaction-first results. Clear valid and
-failed/unclear results react to the original screenshot. Captionless valid
-results also send a detailed reply containing the canonical Stripe-recovered
-email so the group can see which customer was matched. Duplicate results
-remain text replies so the bot can explain the original processing record.
+failed/unclear results react to the original screenshot. `✅` is reserved for
+a unique eligible Stripe match; every non-duplicate non-valid result uses
+`❌` and, when bot replies are enabled, includes a concise explanation.
+Captionless valid results and valid results whose caption identity was
+corrected by Stripe also send a detailed reply containing the canonical
+Stripe-recovered email so the group can see which customer was matched.
+Duplicate results remain text replies so the bot can explain the original
+processing record.
 `REQUIRE_EMAIL_CAPTION` is retained for compatibility but should be `false`:
 the caption email is preferred evidence, not a prerequisite. Missing or
 incorrect captions are recovered only from deterministic OCR evidence and one
 eligible Stripe match; ambiguous evidence remains unconfirmed and reacts with
-`⚠️`, never as an automatic fake/duplicate decision. An exact payment or
+`❌`, never as an automatic fake accusation. The n8n workflow preserves both
+the caption email and any distinct OCR-visible email as candidates. Stripe
+selects the unique eligible charge and its canonical customer email; the
+caption is never used to overwrite that Stripe identity. An exact payment or
 transaction identifier extracted from the screenshot is also used to select
 the matching Stripe charge when it agrees with the eligible payment data.
 
@@ -163,8 +170,8 @@ PROCESSING_QUEUE_COOLDOWN_MS=250
 
 Jobs are processed in FIFO order within each group and scheduled fairly across
 groups. Retryable failures remain queued with exponential backoff. Permanent
-failures move to dead-letter review and receive a warning reaction; they are
-never automatically labeled fake. A running job is recovered as queued when
+failures move to dead-letter review and receive a cross reaction plus a concise
+justification; they are never automatically labeled fake. A running job is recovered as queued when
 the bot restarts. Run only one active Baileys bot instance for a given auth
 directory and queue file.
 

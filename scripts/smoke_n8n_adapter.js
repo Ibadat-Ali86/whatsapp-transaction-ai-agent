@@ -72,8 +72,9 @@ handler({ messages: [message] })
   .then(() => {
     // This smoke test intentionally disables Stripe in the handler config so
     // it validates transport/OCR wiring only. A skipped Stripe gate is an
-    // unconfirmed result and therefore uses the production warning reaction.
-    assert.deepEqual(response?.react?.text, '⚠️');
+    // unconfirmed result and therefore uses the production cross reaction
+    // plus the handler's professional justification reply.
+    assert.deepEqual(response?.react?.text, '❌');
     assert.equal(response?.react?.key?.id, message.key.id);
     console.log(JSON.stringify({
       ok: true,

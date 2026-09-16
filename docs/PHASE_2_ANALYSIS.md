@@ -159,7 +159,9 @@ disabled outside this controlled test.
   malformed captions continue to OCR/Stripe recovery.
 - Invalid token is rejected before OCR.
 - Duplicate message IDs do not re-run OCR.
-- Caption/OCR email conflict is non-approving and does not call Stripe.
+- Caption/OCR email conflicts preserve both candidates; Stripe remains
+  authoritative and may approve only one unique eligible charge, returning
+  its canonical customer identity.
 - OCR timeout/5xx produces a safe retryable workflow error (pending live
   failure injection).
 - n8n unavailable produces a safe WhatsApp error without leaking internals

@@ -138,6 +138,7 @@ Stripe verification request:
 {
   "processing_id": "...",
   "email": "customer@example.com",
+  "email_candidates": ["customer@example.com", "ocr@example.com"],
   "amount_cents": 2500,
   "payment_date": "2026-09-09",
   "minutes": 31,
@@ -151,7 +152,9 @@ Stripe verification request:
 `amount_cents`, `payment_date`, `payment_month`, `payment_day`, `minutes`, and
 `payment_hour` are optional. `payment_month` and `payment_day` together
 represent a receipt date such as `Aug 14`. The normalized caption email is a
-lookup hint, not proof. When it is missing or does not match, the verifier
+lookup hint, not proof. A distinct OCR-visible email is sent as an additional
+candidate, so a mistyped caption cannot hide the canonical Stripe customer.
+When the caption is missing or does not match, the verifier
 requires at least two independently enforceable deterministic constraints and
 exactly one eligible charge. If no receipt timezone is configured,
 `payment_hour` is not a hard filter because sender and Stripe clocks may differ;

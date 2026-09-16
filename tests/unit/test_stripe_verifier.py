@@ -352,6 +352,35 @@ async def test_wrong_caption_can_recover_only_one_charge_from_two_ocr_constraint
 
 
 @pytest.mark.asyncio
+async def test_ocr_email_candidate_recovers_a_mistyped_caption_email():
+    def responses(request):
+        if request.url.path == "/v1/customers":
+            email = request.url.params["email"]
+            if email == "actual@example.com":
+                return httpx.Response(200, json={"data": [{"id": "cus_actual", "email": email}], "has_more": False})
+            return httpx.Response(200, json={"data": [], "has_more": False})
+        assert request.url.path == "/v1/charges"
+        assert request.url.params["customer"] == "cus_actual"
+        return httpx.Response(200, json={
+            "data": [charge(customer="cus_actual", receipt_email="actual@example.com")],
+            "has_more": False,
+        })
+
+    result, _ = await verify_with_responses(
+        responses,
+        evidence_value=evidence(
+            email="mistyped@example.com",
+            email_candidates=("actual@example.com",),
+        ),
+    )
+
+    assert result.status == "MATCHED"
+    assert result.verdict == "VALID"
+    assert result.reason_code == "IDENTITY_RECOVERED_FROM_STRIPE"
+    assert result.matched_transaction["customer_email"] == "actual@example.com"
+
+
+@pytest.mark.asyncio
 async def test_transaction_id_recovers_charge_when_caption_email_is_wrong():
     def responses(request):
         if request.url.path == "/v1/customers":

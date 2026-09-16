@@ -41,7 +41,7 @@ function formatOcrReply(ocrResult, processingId, captionEmail = null) {
   reply += `📅 Date: ${dateStr}\n`;
   reply += `👤 Name: ${name}\n`;
   reply += `✅ Status: ${status}\n\n`;
-  reply += `${screenshotStatus === 'ORIGINAL / VALID' ? '✅' : screenshotStatus === 'DUPLICATE' ? '♻️' : screenshotStatus === 'ERROR' ? '❌' : '⚠️'} Screenshot Status: ${screenshotStatus}\n`;
+  reply += `${screenshotStatus === 'ORIGINAL / VALID' ? '✅' : screenshotStatus === 'DUPLICATE' ? '♻️' : '❌'} Screenshot Status: ${screenshotStatus}\n`;
   if (verification?.duplicate_of_processing_id) {
     reply += `🔁 Original Processing ID: ${verification.duplicate_of_processing_id}\n`;
   }
@@ -58,11 +58,7 @@ function formatOcrReply(ocrResult, processingId, captionEmail = null) {
   }
 
   if (verification) {
-    const marker = verdict === 'VALID'
-      ? '✅'
-      : verdict === 'DUPLICATE'
-        ? '♻️'
-        : verdict === 'ERROR' ? '❌' : '⚠️';
+    const marker = verdict === 'VALID' ? '✅' : verdict === 'DUPLICATE' ? '♻️' : '❌';
     reply += `${marker} Stripe Verification: ${verdict}\n`;
     if (verification.reason_code) {
       reply += `🧾 Verification Reason: ${verification.reason_code}\n`;
@@ -80,6 +76,35 @@ function formatOcrReply(ocrResult, processingId, captionEmail = null) {
   reply += `⚠️ _Note: This is automated extraction. Verify before acting on financial decisions._`;
   
   return reply;
+}
+
+/**
+ * Formats a non-approving verification result. The reaction is deliberately
+ * paired with an explanation so a failed lookup is not mistaken for an
+ * unexplained bot decision. UNCLEAR remains "not confirmed" rather than an
+ * accusation of fraud.
+ */
+function formatVerificationFailureReply(ocrResult, processingId) {
+  const verification = ocrResult?.verification || {};
+  const reason = verification.reason_code || 'VERIFICATION_NOT_CONFIRMED';
+  const candidateCount = Number.isInteger(verification.candidate_count)
+    ? verification.candidate_count
+    : null;
+  const reasonText = {
+    NO_EXACT_MATCH: 'Stripe returned no eligible succeeded payment matching the available screenshot evidence.',
+    MULTIPLE_EXACT_MATCHES: 'Stripe returned multiple eligible payments, so the payment could not be uniquely confirmed.',
+    MULTIPLE_IDENTITY_RECOVERY_MATCHES: 'Stripe returned multiple possible payments, so the payment could not be uniquely confirmed.',
+    MULTIPLE_TRANSACTION_ID_MATCHES: 'The payment identifier matched multiple Stripe records, so no payment was approved.',
+    STRIPE_PAGINATION_LIMIT: 'Stripe search reached its safety limit before a unique payment could be confirmed.',
+    STRIPE_DISABLED: 'Stripe verification is disabled for this bot instance.',
+    STRIPE_LOOKUP_PENDING: 'Stripe verification did not return a completed result.',
+    STRIPE_NETWORK_ERROR: 'Stripe could not be reached; the payment was not approved.',
+    STRIPE_API_ERROR: 'Stripe returned an API error; the payment was not approved.',
+    PROCESSING_FAILED: 'The payment pipeline failed before verification completed; the payment was not approved.',
+    PROCESSING_QUEUE_FULL: 'The payment could not be queued because the processing queue was full; the payment was not approved.',
+  }[reason] || 'Stripe did not return one unique eligible succeeded payment for the submitted evidence.';
+
+  return `❌ *Payment Not Confirmed*\n📋 Processing ID: ${processingId}\n\n${reasonText}\n🧾 Verification reason: ${reason}\n📊 Stripe candidates reviewed: ${candidateCount ?? 'not available'}\n\nNo payment was approved. Please review the screenshot details and Stripe record.`;
 }
 
 /**
@@ -117,4 +142,9 @@ function formatErrorReply(processingId) {
   return `❌ *Error Processing Screenshot*\n📋 Processing ID: ${processingId}\n\nSorry, an error occurred while processing this image. Please try again later.`;
 }
 
-module.exports = { formatOcrReply, formatDuplicateReply, formatErrorReply };
+module.exports = {
+  formatOcrReply,
+  formatDuplicateReply,
+  formatVerificationFailureReply,
+  formatErrorReply,
+};

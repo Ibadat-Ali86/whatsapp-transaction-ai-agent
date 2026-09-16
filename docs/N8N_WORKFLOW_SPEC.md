@@ -33,18 +33,21 @@ Phase 2 Step 1 contract:
 - The adapter sends an `X-Webhook-Token` header when configured. The n8n
   webhook must use header authentication; token values are never exported.
 - The webhook response is returned to Baileys as the OCR/workflow result.
-- Baileys reacts to valid results with `✅`. When the caption is missing and
-  Stripe recovers a valid transaction, Baileys additionally sends a detailed
+- Baileys reacts to valid results with `✅`. When the caption is missing or
+  Stripe corrects a mistyped caption, Baileys additionally sends a detailed
   quoted reply showing the canonical Stripe email and transaction details so
-  the group can audit the recovered identity. Captioned valid results remain
-  reaction-only; duplicate results retain their explanatory text reply.
+  the group can audit the recovered identity. Other captioned valid results
+  remain reaction-only; duplicate results retain their explanatory text reply.
 - The v2 export routes caption/OCR identity plus deterministic amount/date/time
   evidence and an exact OCR payment identifier to the internal Stripe verifier
   when `stripe_verification_enabled` is true. Stripe remains the canonical
   source for amount, date, time, name, customer email, and status. A
   missing/stale caption can recover the email from one unambiguous eligible
-  charge. An exact transaction identifier can disambiguate simultaneous
-  same-amount payments and recover from a wrong caption email. Identifier
+  charge. The workflow preserves a distinct OCR-visible email in
+  `email_candidates` alongside the caption hint so Stripe can choose the
+  canonical identity. An exact transaction identifier can disambiguate
+  simultaneous same-amount payments and recover from a wrong caption email.
+  Identifier
   collisions remain UNCLEAR; if OCR produces an identifier that does not
   resolve, the verifier falls back to the normal safe email/evidence path
   rather than treating the OCR hint alone as a rejection.

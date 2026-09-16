@@ -1,7 +1,11 @@
 const { generateProcessingId } = require('./processing-id');
 const { downloadImage } = require('./media-downloader');
 const { processImageOCR } = require('./ocr-client');
-const { formatOcrReply, formatDuplicateReply } = require('./reply-formatter');
+const {
+  formatOcrReply,
+  formatDuplicateReply,
+  formatVerificationFailureReply,
+} = require('./reply-formatter');
 const { getImageCaption, getStandaloneTextEmail, normalizeCaptionEmail } = require('./caption-email');
 const { createIdempotencyStore } = require('./idempotency-store');
 const { processImageViaN8n } = require('./n8n-client');
@@ -241,16 +245,26 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
             }),
           }, { quoted: message });
         }
-      } else if (finalResult?.verification?.verdict === 'VALID' && !job.caption_email) {
-        if (config.BOT_REPLY_ENABLED) {
+      } else if (finalResult?.verification?.verdict === 'VALID') {
+        const verification = finalResult.verification || {};
+        const canonicalEmail = verification.matched_transaction?.customer_email;
+        const captionEmail = job.caption_email?.toLowerCase();
+        const identityWasRecovered = verification.reason_code === 'IDENTITY_RECOVERED_FROM_STRIPE'
+          || (canonicalEmail && captionEmail && canonicalEmail.toLowerCase() !== captionEmail);
+        if (config.BOT_REPLY_ENABLED && (!job.caption_email || identityWasRecovered)) {
           await currentSock.sendMessage(groupId, {
-            text: formatOcrReply(finalResult, job.processing_id, null),
+            text: formatOcrReply(finalResult, job.processing_id, job.caption_email || null),
           }, { quoted: message });
         }
         await sendReaction(groupId, message, '✅');
       } else {
         const verdict = finalResult?.verification?.verdict;
-        await sendReaction(groupId, message, verdict === 'VALID' ? '✅' : verdict === 'UNCLEAR' || !verdict ? '⚠️' : '❌');
+        if (config.BOT_REPLY_ENABLED && verdict !== 'VALID') {
+          await currentSock.sendMessage(groupId, {
+            text: formatVerificationFailureReply(finalResult, job.processing_id),
+          }, { quoted: message });
+        }
+        await sendReaction(groupId, message, verdict === 'VALID' ? '✅' : '❌');
       }
 
       const verification = finalResult?.verification || {};
@@ -284,7 +298,17 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
     logger.error({ processingId: job.processing_id, attempts: job.attempts, errorType: error?.name || 'Error', errorCode: error?.code || null }, 'Screenshot moved to dead-letter review');
     if (error?.imageHash) duplicateStore.releaseImage(error.imageHash);
     try {
-      await sendReaction(job.group_id, { key: job.message_key }, '⚠️');
+      if (config.BOT_REPLY_ENABLED) {
+        await getSock().sendMessage(job.group_id, {
+          text: formatVerificationFailureReply({
+            verification: {
+              verdict: 'ERROR',
+              reason_code: error?.code || 'PROCESSING_FAILED',
+            },
+          }, job.processing_id),
+        }, { quoted: { key: job.message_key } });
+      }
+      await sendReaction(job.group_id, { key: job.message_key }, '❌');
     } catch (notificationError) {
       logger.error({ processingId: job.processing_id, err: notificationError }, 'Unable to send dead-letter reaction');
     }
@@ -378,7 +402,17 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
           if (error instanceof QueueFullError) {
             logger.error({ processingId, queueDepth: queue.pendingCount }, 'Screenshot rejected because processing queue is full');
             try {
-              await sendReaction(groupId, msg, '⚠️');
+              if (config.BOT_REPLY_ENABLED) {
+                await getSock().sendMessage(groupId, {
+                  text: formatVerificationFailureReply({
+                    verification: {
+                      verdict: 'ERROR',
+                      reason_code: 'PROCESSING_QUEUE_FULL',
+                    },
+                  }, processingId),
+                }, { quoted: msg });
+              }
+              await sendReaction(groupId, msg, '❌');
             } catch (notificationError) {
               logger.error({ processingId, err: notificationError }, 'Unable to send queue-full reaction');
             }

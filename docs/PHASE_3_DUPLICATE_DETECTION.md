@@ -22,9 +22,12 @@ new message
 succeeded charge. `DUPLICATE` is a non-approving verdict and includes the first
 processing ID for audit correlation.
 
-The WhatsApp adapter reacts with `✅` for a clear valid result, `❌` for a
-confirmed failure, and `⚠️` for an unclear result. It sends text only for
-duplicates, including whether
+The WhatsApp adapter reacts with `✅` only for a clear valid Stripe match and
+uses `❌` for invalid, errored, or unresolved results. Non-valid results also
+include a concise justification when bot replies are enabled; unresolved
+evidence is described as not confirmed rather than automatically called fake.
+It sends text only for duplicates and corrected-identity valid results,
+including whether
 the original was found in the same group or a named other allowlisted group
 when WhatsApp metadata is available, plus the original processing ID and
 detection proof.

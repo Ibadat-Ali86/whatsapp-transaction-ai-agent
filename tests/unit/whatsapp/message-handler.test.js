@@ -203,6 +203,45 @@ test('extracts an email from a mixed image caption before Stripe lookup', async 
   assert.equal(lookupEmail, 'christalrich7@gmail.com');
 });
 
+test('shows the canonical Stripe identity when a caption email was mistyped', async () => {
+  const replies = [];
+  const sock = { sendMessage: async (_jid, content) => replies.push(content) };
+  const handler = createMessageHandler(sock, {
+    ALLOWED_GROUP_JIDS: ['1234567890-1234567890@g.us'],
+    BOT_REPLY_ENABLED: true,
+    BOT_REACTIONS_ENABLED: true,
+    N8N_ENABLED: true,
+  }, logger, {
+    duplicateStore: duplicateStore(),
+    downloadImage: async () => ({ imageBytes: Buffer.from('mistyped-caption-image'), mimeType: 'image/png', tempPath: null }),
+    processImageViaN8n: async () => ({
+      fields: { email: 'actual@example.com', amount_cents: 2500 },
+      confidence: 1,
+      provider: 'tesseract',
+      verification: {
+        status: 'MATCHED',
+        verdict: 'VALID',
+        reason_code: 'IDENTITY_RECOVERED_FROM_STRIPE',
+        stripe_charge_id: 'ch-recovered-identity',
+        matched_transaction: {
+          customer_email: 'actual@example.com',
+          amount_cents: 2500,
+          status: 'Completed',
+        },
+      },
+    }),
+  });
+
+  const message = captionedImageMessage('1234567890-1234567890@g.us', 'mistyped-caption');
+  message.message.imageMessage.caption = 'mistyped@example.com';
+  await handler({ messages: [message] });
+
+  assert.equal(replies.length, 2);
+  assert.match(replies[0].text, /Email: actual@example\.com/);
+  assert.match(replies[0].text, /Stripe Verification: VALID/);
+  assert.deepEqual(replies[1], { react: { text: '✅', key: message.key } });
+});
+
 test('sends a captioned image through OCR once per message ID', async () => {
   let ocrCalls = 0;
   let reply;
@@ -237,14 +276,14 @@ test('sends a captioned image through OCR once per message ID', async () => {
   assert.deepEqual(reply.react, { text: '✅', key: message.key });
 });
 
-test('uses a warning reaction for an unresolved payment instead of labeling it fake', async () => {
-  let reply;
+test('uses a cross reaction and justification for an unresolved payment', async () => {
+  const replies = [];
   const sock = {
-    sendMessage: async (_jid, content) => { reply = content; },
+    sendMessage: async (_jid, content) => { replies.push(content); },
   };
   const handler = createMessageHandler(sock, {
     ALLOWED_GROUP_JIDS: ['1234567890-1234567890@g.us'],
-    BOT_REPLY_ENABLED: false,
+    BOT_REPLY_ENABLED: true,
     BOT_REACTIONS_ENABLED: true,
     N8N_ENABLED: false,
   }, logger, {
@@ -261,7 +300,9 @@ test('uses a warning reaction for an unresolved payment instead of labeling it f
   const message = imageMessage('1234567890-1234567890@g.us');
   await handler({ messages: [message] });
 
-  assert.deepEqual(reply, { react: { text: '⚠️', key: message.key } });
+  assert.match(replies[0].text, /Payment Not Confirmed/);
+  assert.match(replies[0].text, /MULTIPLE_EXACT_MATCHES/);
+  assert.deepEqual(replies[1], { react: { text: '❌', key: message.key } });
 });
 
 test('routes a captioned image through n8n when enabled', async () => {

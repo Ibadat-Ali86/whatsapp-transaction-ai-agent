@@ -47,6 +47,11 @@ TRANSACTION_METADATA_KEYS = {
 @dataclass(frozen=True)
 class PaymentEvidence:
     email: Optional[str] = None
+    # The primary email is normally the WhatsApp caption. Additional
+    # syntactically valid identities (for example, an email visible inside
+    # the receipt) remain available as independent lookup candidates so a
+    # mistyped caption cannot hide the canonical Stripe customer.
+    email_candidates: tuple[str, ...] = ()
     transaction_id: Optional[str] = None
     amount_cents: Optional[int] = None
     payment_date: Optional[date] = None
@@ -424,6 +429,16 @@ class StripeVerifier:
 
         raise StripeVerificationError("STRIPE_PAGINATION_LIMIT", retryable=False)
 
+    async def _customer_ids_for_emails(
+        self,
+        client: httpx.AsyncClient,
+        emails: set[str],
+    ) -> set[str]:
+        customer_ids: set[str] = set()
+        for email in sorted(emails):
+            customer_ids.update(await self._customer_ids(client, email))
+        return customer_ids
+
     async def _customer_email(self, client: httpx.AsyncClient, customer_id: str) -> Optional[str]:
         body = await self._get(client, f"/v1/customers/{customer_id}", {})
         email = body.get("email")
@@ -644,7 +659,12 @@ class StripeVerifier:
         if require_identity:
             charge_email = self._charge_email(charge)
             customer_id = charge.get("customer")
-            email_matches = charge_email == evidence.email or customer_id in customer_ids
+            identity_emails = {
+                value.casefold()
+                for value in (evidence.email, *evidence.email_candidates)
+                if isinstance(value, str) and value
+            }
+            email_matches = charge_email in identity_emails or customer_id in customer_ids
             if not email_matches:
                 return False
 
@@ -741,12 +761,20 @@ class StripeVerifier:
             normalized_email = None
             if evidence.email is not None and evidence.email.strip():
                 normalized_email = normalize_email(evidence.email)
+            normalized_email_candidates: list[str] = []
+            for candidate in evidence.email_candidates:
+                if candidate is None or not str(candidate).strip():
+                    continue
+                normalized_candidate = normalize_email(str(candidate))
+                if normalized_candidate != normalized_email and normalized_candidate not in normalized_email_candidates:
+                    normalized_email_candidates.append(normalized_candidate)
             normalized_transaction_id = None
             if evidence.transaction_id is not None and evidence.transaction_id.strip():
                 normalized_transaction_id = normalize_transaction_id(evidence.transaction_id)
             evidence = replace(
                 evidence,
                 email=normalized_email,
+                email_candidates=tuple(normalized_email_candidates),
                 transaction_id=normalized_transaction_id,
                 currency=evidence.currency.casefold(),
                 payment_method_type=evidence.payment_method_type.casefold(),
@@ -761,9 +789,14 @@ class StripeVerifier:
             self.audit_logger.log_verification(processing_id, result, safe_details="payment_method_policy")
             return result
 
+        identity_emails = {
+            value.casefold()
+            for value in (evidence.email, *evidence.email_candidates)
+            if isinstance(value, str) and value
+        }
         email_hash = _email_hash(evidence.email)
         evidence_constraint_count = self._evidence_constraint_count(evidence)
-        if not evidence.email and evidence_constraint_count < 2 and not evidence.transaction_id:
+        if not identity_emails and evidence_constraint_count < 2 and not evidence.transaction_id:
             result = StripeVerificationResult(
                 processing_id,
                 "NO_MATCH",
@@ -815,7 +848,7 @@ class StripeVerifier:
         owned_client = self.http_client is None
         client = self.http_client or httpx.AsyncClient(timeout=self.timeout_seconds)
         try:
-            customer_ids = await self._customer_ids(client, evidence.email) if evidence.email else set()
+            customer_ids = await self._customer_ids_for_emails(client, identity_emails) if identity_emails else set()
             # Prefer the strongest available Stripe-side identity constraint.
             # Do not apply the OCR date to this first customer-scoped query:
             # receipt dates can cross the Stripe-account timezone boundary, and
@@ -870,7 +903,7 @@ class StripeVerifier:
                         if evidence.payment_date is not None
                         else await self._charges_for_lookback(client)
                     )
-            elif evidence.email:
+            elif identity_emails:
                 charges = await self._charges_for_lookback(client)
             elif evidence.payment_date is not None:
                 charges = await self._charges_for_day(client, start_timestamp, end_timestamp)
@@ -901,7 +934,7 @@ class StripeVerifier:
 
             matches = matches_for(
                 charges,
-                include_time_constraints=not bool(evidence.email),
+                include_time_constraints=not bool(identity_emails),
                 match_hour=bool(self.screenshot_timezone),
                 match_minute=bool(evidence.email),
             )
@@ -952,7 +985,7 @@ class StripeVerifier:
             # fallback when a receipt minute was OCR'd incorrectly or belongs
             # to a different display timezone. It only proceeds when the
             # identity/amount/status/payment-method match is unique.
-            if not matches and evidence.email:
+            if not matches and identity_emails:
                 matches = matches_for(
                     charges,
                     include_time_constraints=False,
@@ -977,7 +1010,7 @@ class StripeVerifier:
                     match_hour=False,
                     match_minute=True,
                 )
-                if not matches and evidence.email:
+                if not matches and identity_emails:
                     matches = matches_for(
                         charges,
                         include_time_constraints=False,
@@ -1062,7 +1095,7 @@ class StripeVerifier:
             # Stripe charge remains. The returned customer_email is then the
             # authoritative identity, not the caption.
             recovered_identity = False
-            if not matches and evidence.email and evidence_constraint_count >= 2:
+            if not matches and identity_emails and evidence_constraint_count >= 2:
                 recovery_matches = [
                     charge for charge in charges
                     if self._matches(
@@ -1094,10 +1127,15 @@ class StripeVerifier:
                 matched_transaction = self._transaction_details(matches[0], zone)
                 if matched_transaction is not None and not matched_transaction.get("customer_email"):
                     customer_id = matches[0].get("customer")
-                    if not evidence.email and isinstance(customer_id, str) and customer_id:
+                    if not identity_emails and isinstance(customer_id, str) and customer_id:
                         matched_transaction["customer_email"] = await self._customer_email(client, customer_id)
-                    if not matched_transaction.get("customer_email") and evidence.email:
-                        matched_transaction["customer_email"] = evidence.email
+                matched_email = matched_transaction.get("customer_email") if matched_transaction else None
+                if (
+                    isinstance(matched_email, str)
+                    and evidence.email
+                    and matched_email.casefold() != evidence.email.casefold()
+                ):
+                    recovered_identity = True
                 has_ocr_constraints = evidence_constraint_count > 0
                 result = StripeVerificationResult(
                     processing_id,
