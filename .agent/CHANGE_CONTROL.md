@@ -73,6 +73,27 @@ Per `docs/CHANGE_CONTROL.md`, agents must **never**:
 
 <!-- Append new change records below this line. Most recent first. -->
 
+### CC-0008 — Multi-Group Burst Intake and Memory Bounding
+
+| Field              | Value |
+|--------------------|-------|
+| **ID**             | CC-0008 |
+| **Date**           | 2026-09-16 |
+| **Class**          | C2 |
+| **Agent**          | Codex |
+| **Requested by**   | Project owner |
+| **Phase**          | Phase 2 |
+| **Reason**         | Keep 50+ group bursts responsive while preserving a single safe processing worker and bound temporary caption-correlation memory. |
+| **Requirement**    | Multi-group fairness, backpressure, retry safety, and production observability |
+| **Files changed**  | `src/whatsapp/message-handler.js`, `tests/unit/whatsapp/message-handler.test.js`, `docs/ENVIRONMENT.md`, `docs/DEPLOYMENT_DIGITALOCEAN.md` |
+| **Behavior changed** | Batch intake now performs bounded caption-association waits concurrently; the queue still processes expensive OCR/Stripe work with configured single-worker concurrency. Stale nearby-email entries are expired and capped at 4,096 sender/group keys. |
+| **Security impact** | Same-group/same-sender correlation rules are unchanged; no new data is persisted or logged. |
+| **Data impact**    | None; only short-lived in-memory correlation entries are bounded more strictly. |
+| **Tests run**      | `npm run test:whatsapp` (50 passed); `.venv/bin/python -m pytest -q` (118 passed); 50-group handler burst probe, 50-group queue fairness probe, 50-group allowlist/duplicate probe, n8n smoke test, syntax checks, and `git diff --check` (passed). |
+| **Rollback**       | Revert CC-0008 changes; retain the prior single-worker queue behavior. |
+| **Documentation updated** | Yes — `docs/ENVIRONMENT.md`, `docs/DEPLOYMENT_DIGITALOCEAN.md` |
+| **Status**         | COMPLETE |
+
 ### CC-0007 — Mistyped Caption Recovery and Explicit Non-Approval Reactions
 
 | Field              | Value |

@@ -12,6 +12,13 @@ safer choice when several groups may send screenshots in bursts. Keep
 `PROCESSING_QUEUE_CONCURRENCY=1` until peak throughput is measured. A 1 GB
 Droplet is not recommended for this three-service stack.
 
+The 50+ group target means the allowlist and fairness logic can serve many
+groups; it does not promise 50 simultaneous OCR pipelines. The default worker
+processes one payment at a time, applies backpressure at 200 pending jobs, and
+uses retries/dead-letter review for transient or permanent failures. Measure
+the real median and p95 end-to-end processing time with synthetic screenshots
+before increasing capacity or changing concurrency.
+
 ## 1. Prepare Ubuntu
 
 Use an Ubuntu LTS Droplet with an SSH key and a non-root deployment user. On

@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
 const os = require('os');
 const path = require('path');
 process.env.WHATSAPP_ALLOWED_GROUP_JIDS ||= '1234567890-1234567890@g.us';
@@ -84,6 +85,55 @@ test('does not process an image from a direct chat', async () => {
   await handler({ messages: [imageMessage('923220692321@s.whatsapp.net')] });
 
   assert.equal(sendMessageCalled, false);
+});
+
+test('intakes a 50-group image burst without serial association delays', async () => {
+  const groupIds = Array.from({ length: 50 }, (_, index) => `2000000000-${String(index).padStart(10, '0')}@g.us`);
+  const reactions = [];
+  let processed = 0;
+  const storePath = path.join(os.tmpdir(), `wa-50-group-handler-${process.pid}-${Math.random()}.json`);
+  const handler = createMessageHandler({
+    sendMessage: async (_jid, content) => reactions.push(content),
+  }, {
+    ALLOWED_GROUP_JIDS: groupIds,
+    BOT_REPLY_ENABLED: false,
+    BOT_REACTIONS_ENABLED: true,
+    N8N_ENABLED: false,
+    CAPTION_ASSOCIATION_WINDOW_MS: 20,
+    PROCESSING_QUEUE_CONCURRENCY: 1,
+    PROCESSING_QUEUE_MAX_PENDING: 200,
+    PROCESSING_QUEUE_COOLDOWN_MS: 0,
+  }, logger, {
+    duplicateStore: createDuplicateStore({ filePath: storePath }),
+    downloadImage: async (_sock, message) => ({
+      imageBytes: Buffer.from(`unique-burst-image-${message.key.remoteJid}`),
+      mimeType: 'image/png',
+      tempPath: null,
+    }),
+    processImageOCR: async () => ({
+      fields: { amount_cents: 1000 },
+      verification: { verdict: 'VALID', stripe_charge_id: `ch-burst-${processed += 1}` },
+    }),
+  });
+
+  const messages = groupIds.map((groupId, index) => ({
+    key: {
+      remoteJid: groupId,
+      participant: `923000000${String(index).padStart(3, '0')}@s.whatsapp.net`,
+      fromMe: false,
+      id: `burst-image-${index}`,
+    },
+    message: { imageMessage: { mimetype: 'image/png' } },
+  }));
+  const startedAt = Date.now();
+  await handler({ messages });
+  const elapsedMs = Date.now() - startedAt;
+
+  fs.rmSync(storePath, { force: true });
+  assert.equal(processed, 50);
+  assert.equal(reactions.length, 50);
+  assert.equal(reactions.filter(event => event.react?.text === '✅').length, 50);
+  assert.ok(elapsedMs < 1000, `50-group intake took ${elapsedMs}ms`);
 });
 
 test('processes a captionless image so Stripe can recover identity from OCR evidence', async () => {

@@ -34,6 +34,7 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
   });
   const groupNameCache = new Map();
   const pendingCaptionEmails = new Map();
+  const MAX_PENDING_CAPTION_KEYS = 4096;
   const captionAssociationWindowMs = Number.isInteger(config.CAPTION_ASSOCIATION_WINDOW_MS)
     ? config.CAPTION_ASSOCIATION_WINDOW_MS
     : 2000;
@@ -41,10 +42,32 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
 
   const senderKey = message => message?.key?.participant || message?.key?.participantAlt || '';
   const captionKey = (groupId, message) => `${groupId || ''}:${senderKey(message)}`;
+  const cleanupPendingCaptionEmails = () => {
+    const cutoff = Date.now() - captionAssociationWindowMs;
+    for (const [key, candidates] of pendingCaptionEmails) {
+      const activeCandidates = candidates.filter(candidate => candidate.receivedAt >= cutoff);
+      if (activeCandidates.length) pendingCaptionEmails.set(key, activeCandidates);
+      else pendingCaptionEmails.delete(key);
+    }
+    while (pendingCaptionEmails.size > MAX_PENDING_CAPTION_KEYS) {
+      let oldestKey = null;
+      let oldestReceivedAt = Infinity;
+      for (const [key, candidates] of pendingCaptionEmails) {
+        const lastReceivedAt = candidates[candidates.length - 1]?.receivedAt || 0;
+        if (lastReceivedAt < oldestReceivedAt) {
+          oldestKey = key;
+          oldestReceivedAt = lastReceivedAt;
+        }
+      }
+      if (oldestKey === null) break;
+      pendingCaptionEmails.delete(oldestKey);
+    }
+  };
   const rememberStandaloneEmail = (groupId, message, sequence) => {
     if (message?.key?.fromMe || !senderKey(message)) return;
     const email = getStandaloneTextEmail(message);
     if (!email) return;
+    cleanupPendingCaptionEmails();
     const key = captionKey(groupId, message);
     const cutoff = Date.now() - captionAssociationWindowMs;
     const candidates = (pendingCaptionEmails.get(key) || [])
@@ -330,6 +353,7 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
   const handler = async messageUpdate => {
     try {
       const messages = messageUpdate?.messages || [];
+      cleanupPendingCaptionEmails();
       const messageSequences = new Map();
       for (const msg of messages) {
         const sequence = ++messageSequence;
@@ -339,21 +363,21 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
           rememberStandaloneEmail(groupId, msg, sequence);
         }
       }
-      for (const msg of messages) {
+      const intakePromises = messages.map(async msg => {
         const groupId = msg.key?.remoteJid;
         if (!isAllowedGroupJid(groupId, config.ALLOWED_GROUP_JIDS)) {
           logger.debug({ groupIdHash: hashGroupJid(groupId) }, 'Ignoring message outside the WhatsApp group allowlist');
-          continue;
+          return;
         }
-        if (!msg.message || msg.key?.fromMe) continue;
+        if (!msg.message || msg.key?.fromMe) return;
         const isImage = !!(msg.message.imageMessage || msg.message.extendedTextMessage?.contextInfo?.quotedMessage?.imageMessage);
-        if (!isImage) continue;
+        if (!isImage) return;
 
         const messageId = msg.key?.id;
         const idempotencyKey = `${groupId || 'unknown'}:${messageId || 'unknown'}`;
         if (!idempotencyStore.claim(idempotencyKey)) {
           logger.debug({ messageId, groupIdHash: hashGroupJid(groupId) }, 'Skipping duplicate WhatsApp message');
-          continue;
+          return;
         }
 
         const captionEmail = normalizeCaptionEmail(getImageCaption(msg));
@@ -416,11 +440,12 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
             } catch (notificationError) {
               logger.error({ processingId, err: notificationError }, 'Unable to send queue-full reaction');
             }
-            continue;
+            return;
           }
           throw error;
         }
-      }
+      });
+      await Promise.all(intakePromises);
     } catch (globalError) {
       logger.error({ err: globalError }, 'Message intake handler crashed');
     }

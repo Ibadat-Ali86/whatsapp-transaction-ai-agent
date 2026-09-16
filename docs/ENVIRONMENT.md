@@ -175,6 +175,14 @@ justification; they are never automatically labeled fake. A running job is recov
 the bot restarts. Run only one active Baileys bot instance for a given auth
 directory and queue file.
 
+When Baileys delivers several messages in one update, the adapter performs the
+short nearby-email association waits concurrently so a 50-group burst is not
+delayed by 50 sequential timers. The expensive OCR/Stripe pipeline remains a
+single worker by default, preserving ordered, safe file-backed state. Monitor
+the structured `Incoming image queued`, `Processing queue job completed`, and
+`Message processing complete` logs for queue depth, duration, retries, and
+verification outcomes.
+
 The local queue is appropriate for one Droplet and one bot process. Before
 running multiple bot or worker processes, replace it with a shared transactional
 queue/ledger such as Redis plus a shared database, and add a distributed lock.
