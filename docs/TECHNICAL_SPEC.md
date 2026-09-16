@@ -97,11 +97,14 @@ Incoming image event:
 }
 
 The WhatsApp intake layer accepts a missing or malformed caption as a
-recoverable condition. A syntactically valid caption is normalized to
-lowercase and used as a lookup hint; OCR email text remains evidence that must
-be compared, not blindly trusted. Without a usable email, Stripe recovery is
-approved only when deterministic evidence identifies exactly one eligible
-charge.
+recoverable condition. One email token is extracted from a caption and
+normalized to lowercase even when the caption also contains payment context;
+multiple different addresses remain ambiguous. A caption email is only a
+lookup hint; OCR email text remains evidence that must be compared, not blindly
+trusted. If the image has no caption, a nearby email-only message from the same
+sender and group may be correlated before or after the image. Without a usable
+email, Stripe recovery is approved only when deterministic evidence identifies
+exactly one eligible charge.
 
 OCR result:
 
@@ -153,7 +156,10 @@ requires at least two independently enforceable deterministic constraints and
 exactly one eligible charge. If no receipt timezone is configured,
 `payment_hour` is not a hard filter because sender and Stripe clocks may differ;
 minute/date/amount constraints remain enforced. Multiple matches, conflicts,
-and API failures remain non-approving outcomes. The endpoint requires an
+and API failures remain non-approving outcomes. When a receipt timezone is
+configured, an exact amount/time Search miss gets one bounded same-day recovery
+pass that relaxes only the hour; amount/date/minute/status/currency/payment
+method must still identify exactly one eligible charge. The endpoint requires an
 internal service token and Stripe keys are never accepted from request
 payloads.
 

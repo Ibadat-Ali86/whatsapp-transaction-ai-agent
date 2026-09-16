@@ -116,6 +116,9 @@ dead-letter behavior.
 - Enable Droplet backups and monitoring; test restoring auth, queue, duplicate,
   and n8n volumes before production use.
 - Run exactly one bot container for the WhatsApp auth volume.
+- Keep the bot container as the only process using its auth and data volumes;
+  the application PID lock also prevents a second bot process inside the same
+  deployment from contending for the session.
 - Keep live Stripe mode restricted to approved groups and read-only keys.
 - Disable Groq fallback if client policy does not permit images to leave the
   Droplet.

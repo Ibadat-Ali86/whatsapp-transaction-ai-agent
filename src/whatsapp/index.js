@@ -5,6 +5,19 @@ const { createConnection } = require('./connection');
 const { createMessageHandler } = require('./message-handler');
 const { checkOcrServiceHealth } = require('./ocr-client');
 const { checkN8nServiceHealth } = require('./n8n-client');
+const { createProcessLock, ProcessLockError } = require('./process-lock');
+
+let botProcessLock = null;
+
+function releaseBotProcessLock() {
+  if (!botProcessLock) return;
+  try {
+    botProcessLock.release();
+  } catch (err) {
+    logger.error({ err }, 'Failed to release bot process lock');
+  }
+  botProcessLock = null;
+}
 
 /**
  * Main entry point for the WhatsApp bot.
@@ -20,6 +33,23 @@ Auth Dir: ${config.AUTH_DIR}/
 `);
 
   logger.info('Starting WhatsApp Transaction AI Agent...');
+
+  botProcessLock = createProcessLock(config.BOT_LOCK_PATH);
+  try {
+    botProcessLock.acquire();
+  } catch (err) {
+    if (err instanceof ProcessLockError) {
+      logger.error(
+        { lock_path: config.BOT_LOCK_PATH, owner_pid: err.ownerPid },
+        'Another WhatsApp bot process is already running for this auth state; stop it before starting another instance',
+      );
+      releaseBotProcessLock();
+      process.exitCode = 1;
+      return;
+    }
+    throw err;
+  }
+  process.once('exit', releaseBotProcessLock);
   
   const ocrReady = await checkOcrServiceHealth();
   if (!ocrReady) {
@@ -65,7 +95,16 @@ Auth Dir: ${config.AUTH_DIR}/
     onSocket: (sock) => {
       socketRef.current = sock;
       sock.ev.on('messages.upsert', handler);
-      handler.start();
+    },
+    onConnectionOpened: (sock) => {
+      if (socketRef.current === sock) handler.start();
+    },
+    onConnectionClosed: ({ socket }) => {
+      // Do not let queued jobs use a closed socket. If an older socket closes
+      // after a replacement is already active, keep the replacement intact.
+      if (socketRef.current !== socket) return;
+      socketRef.current = null;
+      handler.stop();
     },
   });
 
@@ -78,6 +117,7 @@ Auth Dir: ${config.AUTH_DIR}/
     } catch (err) {
       logger.error({ err }, 'Error closing socket');
     }
+    releaseBotProcessLock();
     process.exit(0);
   };
 
@@ -86,6 +126,7 @@ Auth Dir: ${config.AUTH_DIR}/
 }
 
 main().catch(err => {
+  releaseBotProcessLock();
   logger.fatal({ err }, 'Fatal error during startup');
   process.exit(1);
 });

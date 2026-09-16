@@ -7,6 +7,14 @@
 4. Reconnect only after identifying reason.
 5. Do not delete auth state blindly.
 
+If the log contains `conflict`, `type=replaced`, or reason `440`, another
+Baileys process/session is using the same WhatsApp linked-device state. The bot
+now pauses automatic reconnect for this terminal conflict. Stop the other bot
+process or remove the stale duplicate deployment, then start one bot instance.
+Do not repeatedly restart both copies, because each connection can replace the
+other and recreate the loop. The local `BOT_LOCK_PATH` also blocks accidental
+second starts that use the same checkout.
+
 If other group members see “Waiting for this message”, restart with
 `RESET_GROUP_SENDER_KEYS_ON_START=true`. The bot refreshes allowlisted group
 metadata and invalidates only persisted sender-key memory so WhatsApp can

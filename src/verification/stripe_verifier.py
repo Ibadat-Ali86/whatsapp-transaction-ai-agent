@@ -463,6 +463,64 @@ class StripeVerifier:
 
         raise StripeVerificationError("STRIPE_PAGINATION_LIMIT", retryable=False)
 
+    async def _charges_for_search(
+        self,
+        client: httpx.AsyncClient,
+        query: str,
+    ) -> list[dict[str, Any]]:
+        """Search a narrowed charge set without walking the account ledger.
+
+        Captionless receipts commonly provide only amount and receipt time.
+        Listing every charge in a large live account is both expensive and
+        bounded by ``max_pages``. Stripe's search endpoint lets us constrain
+        the server-side result set before applying the verifier's stricter
+        local checks (receipt email, payment method, minute, and timezone).
+        """
+        charges: list[dict[str, Any]] = []
+        page_cursor: Optional[str] = None
+
+        for _ in range(self.max_pages):
+            params: dict[str, Any] = {"query": query, "limit": 100}
+            if page_cursor:
+                params["page"] = page_cursor
+
+            body = await self._get(client, "/v1/charges/search", params)
+            page = body.get("data", [])
+            if not isinstance(page, list):
+                raise StripeVerificationError("STRIPE_INVALID_RESPONSE", retryable=True)
+            charges.extend(item for item in page if isinstance(item, dict))
+
+            if not body.get("has_more"):
+                return charges
+            page_cursor = body.get("next_page")
+            if not isinstance(page_cursor, str) or not page_cursor:
+                raise StripeVerificationError("STRIPE_INVALID_PAGINATION", retryable=True)
+
+        raise StripeVerificationError("STRIPE_PAGINATION_LIMIT", retryable=False)
+
+    def _charge_search_query(
+        self,
+        evidence: PaymentEvidence,
+        *,
+        lower_timestamp: int,
+        upper_timestamp: Optional[int] = None,
+    ) -> Optional[str]:
+        """Build a server-side query for evidence that has an exact amount."""
+        if evidence.amount_cents is None:
+            return None
+        # Stripe Search supports exact numeric/token clauses. The local
+        # matcher remains authoritative because Search cannot express every
+        # verifier rule (receipt_email, payment method details, minute, etc.).
+        query = (
+            f"amount:{evidence.amount_cents} "
+            f"AND currency:\"{evidence.currency}\" "
+            f"AND status:\"succeeded\" "
+            f"AND created>{max(0, lower_timestamp - 1)}"
+        )
+        if upper_timestamp is not None:
+            query += f" AND created<{max(lower_timestamp, upper_timestamp) + 1}"
+        return query
+
     async def _charges_for_customers(
         self,
         client: httpx.AsyncClient,
@@ -581,6 +639,7 @@ class StripeVerifier:
         require_identity: bool,
         include_time_constraints: bool,
         match_hour: bool = True,
+        match_minute: bool = False,
     ) -> bool:
         if require_identity:
             charge_email = self._charge_email(charge)
@@ -619,6 +678,10 @@ class StripeVerifier:
             if evidence.minutes is not None and local_created.minute != evidence.minutes:
                 return False
             if match_hour and evidence.payment_hour is not None and local_created.hour != evidence.payment_hour:
+                return False
+        elif match_minute and evidence.minutes is not None:
+            local_created = _charge_local_datetime(charge, zone)
+            if local_created is None or local_created.minute != evidence.minutes:
                 return False
         return True
 
@@ -722,6 +785,27 @@ class StripeVerifier:
                 start_timestamp, end_timestamp, _ = _local_day_bounds(evidence.payment_date, query_timezone)
             else:
                 start_timestamp = end_timestamp = 0
+            search_lower_timestamp = (
+                start_timestamp
+                if evidence.payment_date is not None
+                else int(datetime.now(timezone.utc).timestamp()) - int(timedelta(days=self.lookback_days).total_seconds())
+            )
+            search_upper_timestamp = None
+            if (
+                evidence.payment_date is not None
+                and screenshot_zone is not None
+                and evidence.payment_hour is not None
+                and evidence.minutes is not None
+            ):
+                minute_start = datetime.combine(
+                    evidence.payment_date,
+                    time(evidence.payment_hour, evidence.minutes),
+                    tzinfo=screenshot_zone,
+                )
+                # Allow provider timestamp jitter around a displayed minute;
+                # the local matcher below still requires the exact minute.
+                search_lower_timestamp = int(minute_start.timestamp()) - 60
+                search_upper_timestamp = int(minute_start.timestamp()) + 120
         except (StripeVerificationError, TypeError, ValueError) as exc:
             reason_code = exc.reason_code if isinstance(exc, StripeVerificationError) else str(exc)
             result = StripeVerificationResult(processing_id, "ERROR", "ERROR", reason_code, email_hash=email_hash)
@@ -732,51 +816,187 @@ class StripeVerifier:
         client = self.http_client or httpx.AsyncClient(timeout=self.timeout_seconds)
         try:
             customer_ids = await self._customer_ids(client, evidence.email) if evidence.email else set()
-            if evidence.payment_date is not None:
+            # Prefer the strongest available Stripe-side identity constraint.
+            # Do not apply the OCR date to this first customer-scoped query:
+            # receipt dates can cross the Stripe-account timezone boundary, and
+            # a valid customer charge must not be discarded before matching.
+            if customer_ids:
+                try:
+                    charges = await self._charges_for_customers(client, customer_ids)
+                except StripeVerificationError as exc:
+                    if exc.reason_code != "STRIPE_PAGINATION_LIMIT":
+                        raise
+                    query = self._charge_search_query(
+                        evidence,
+                        lower_timestamp=search_lower_timestamp,
+                        upper_timestamp=search_upper_timestamp,
+                    )
+                    if query is None:
+                        raise
+                    charges = await self._charges_for_search(client, query)
+            elif evidence.amount_cents is not None:
+                # Some Cash App/receipt payments have an email but no Stripe
+                # Customer object. Search by exact amount and a bounded time
+                # window instead of walking the account's entire charge list.
+                query = self._charge_search_query(
+                    evidence,
+                    lower_timestamp=search_lower_timestamp,
+                    upper_timestamp=search_upper_timestamp,
+                )
+                if query is None:
+                    raise StripeVerificationError("INSUFFICIENT_STRIPE_EVIDENCE")
+                try:
+                    charges = await self._charges_for_search(client, query)
+                except StripeVerificationError as exc:
+                    # Search can be unavailable on older account API versions.
+                    # Preserve a compatible, bounded fallback rather than
+                    # turning that capability difference into a false result.
+                    if exc.reason_code != "STRIPE_API_ERROR":
+                        raise
+                    charges = (
+                        await self._charges_for_day(client, start_timestamp, end_timestamp)
+                        if evidence.payment_date is not None
+                        else await self._charges_for_lookback(client)
+                    )
+                if not charges:
+                    # Stripe Search is eventually consistent. A just-created
+                    # payment may be visible in the dashboard/list endpoint
+                    # before it is indexed for Search. Retry through the
+                    # bounded legacy list path; local eligibility matching is
+                    # still authoritative and an empty/limited list never
+                    # becomes an approval.
+                    charges = (
+                        await self._charges_for_day(client, start_timestamp, end_timestamp)
+                        if evidence.payment_date is not None
+                        else await self._charges_for_lookback(client)
+                    )
+            elif evidence.email:
+                charges = await self._charges_for_lookback(client)
+            elif evidence.payment_date is not None:
                 charges = await self._charges_for_day(client, start_timestamp, end_timestamp)
-            elif customer_ids:
-                charges = await self._charges_for_customers(client, customer_ids)
             else:
                 charges = await self._charges_for_lookback(client)
-            matches = [
-                charge for charge in charges
-                if self._matches(
-                    charge,
-                    evidence,
-                    customer_ids,
-                    screenshot_zone or zone,
-                    require_identity=bool(evidence.email),
-                    include_time_constraints=not bool(evidence.email),
-                    match_hour=bool(self.screenshot_timezone),
-                )
-            ]
+            match_zone = screenshot_zone or zone
 
-            # A charge can be discoverable by receipt_email without being
-            # attached to the Customer returned by the email lookup. Retry
-            # with the bounded lookback only when the cheaper customer-scoped
-            # search produced no match; never broaden an already successful
-            # match into a second candidate set.
-            if not matches and customer_ids and evidence.payment_date is None:
-                charges = await self._charges_for_lookback(client)
-                matches = [
-                    charge for charge in charges
+            def matches_for(
+                candidate_charges: list[dict[str, Any]],
+                *,
+                include_time_constraints: bool,
+                match_hour: bool,
+                match_minute: bool,
+            ) -> list[dict[str, Any]]:
+                return [
+                    charge for charge in candidate_charges
                     if self._matches(
                         charge,
                         evidence,
                         customer_ids,
-                        screenshot_zone or zone,
-                        require_identity=True,
-                        include_time_constraints=False,
+                        match_zone,
+                        require_identity=bool(evidence.email),
+                        include_time_constraints=include_time_constraints,
+                        match_hour=match_hour,
+                        match_minute=match_minute,
                     )
                 ]
 
+            matches = matches_for(
+                charges,
+                include_time_constraints=not bool(evidence.email),
+                match_hour=bool(self.screenshot_timezone),
+                match_minute=bool(evidence.email),
+            )
+
+            # A receipt clock can differ from the Stripe account clock even
+            # when the account dashboard is configured for US Central. If the
+            # precise minute query produced no eligible match, widen only to
+            # the same receipt date, then require the exact minute without
+            # requiring the potentially shifted hour. This remains safe:
+            # amount, date, minute, status, currency, and payment method must
+            # still identify one eligible charge.
+            if (
+                not matches
+                and not customer_ids
+                and evidence.amount_cents is not None
+                and evidence.payment_date is not None
+                and search_upper_timestamp is not None
+            ):
+                day_query = self._charge_search_query(
+                    evidence,
+                    lower_timestamp=start_timestamp,
+                    upper_timestamp=end_timestamp,
+                )
+                if day_query is not None:
+                    try:
+                        day_charges = await self._charges_for_search(client, day_query)
+                    except StripeVerificationError as exc:
+                        if exc.reason_code != "STRIPE_API_ERROR":
+                            raise
+                        day_charges = await self._charges_for_day(client, start_timestamp, end_timestamp)
+                    if day_charges:
+                        charges = day_charges
+                        matches = matches_for(
+                            charges,
+                            include_time_constraints=not bool(evidence.email),
+                            match_hour=bool(self.screenshot_timezone),
+                            match_minute=bool(evidence.email),
+                        )
+                        if not matches and not evidence.email:
+                            matches = matches_for(
+                                charges,
+                                include_time_constraints=True,
+                                match_hour=False,
+                                match_minute=False,
+                            )
+
+            # Email identity plus the Stripe payment attributes is a safe
+            # fallback when a receipt minute was OCR'd incorrectly or belongs
+            # to a different display timezone. It only proceeds when the
+            # identity/amount/status/payment-method match is unique.
+            if not matches and evidence.email:
+                matches = matches_for(
+                    charges,
+                    include_time_constraints=False,
+                    match_hour=False,
+                    match_minute=False,
+                )
+
+            # A charge can be discoverable by receipt_email without being
+            # attached to the Customer returned by the email lookup. Retry
+            # with a bounded fallback only when the cheaper customer-scoped
+            # search produced no match; never broaden an already successful
+            # match into a second candidate set.
+            if not matches and customer_ids:
+                charges = (
+                    await self._charges_for_day(client, start_timestamp, end_timestamp)
+                    if evidence.payment_date is not None
+                    else await self._charges_for_lookback(client)
+                )
+                matches = matches_for(
+                    charges,
+                    include_time_constraints=False,
+                    match_hour=False,
+                    match_minute=True,
+                )
+                if not matches and evidence.email:
+                    matches = matches_for(
+                        charges,
+                        include_time_constraints=False,
+                        match_hour=False,
+                        match_minute=False,
+                    )
+
             # A screenshot/provider transaction ID is a high-strength lookup
             # hint. Use it after the normal customer search and its bounded
-            # lookback fallback so a wrong caption email cannot hide the
+            # fallback so a wrong caption email cannot hide the
             # correct charge. Amount, status, currency, payment method, and
             # available receipt time/date still have to agree; an ID alone is
             # never allowed to bypass charge eligibility checks.
-            def transaction_matches_for(candidate_charges: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            def transaction_matches_for(
+                candidate_charges: list[dict[str, Any]],
+                *,
+                include_time_constraints: bool,
+                match_hour: bool,
+            ) -> list[dict[str, Any]]:
                 return [
                     charge for charge in candidate_charges
                     if self._transaction_id_matches(charge, evidence)
@@ -784,21 +1004,42 @@ class StripeVerifier:
                         charge,
                         evidence,
                         customer_ids,
-                        screenshot_zone or zone,
+                        match_zone,
                         require_identity=False,
-                        include_time_constraints=True,
-                        match_hour=bool(self.screenshot_timezone),
+                        include_time_constraints=include_time_constraints,
+                        match_hour=match_hour,
                     )
                 ]
 
-            transaction_matches = transaction_matches_for(charges) if evidence.transaction_id else []
+            transaction_matches = transaction_matches_for(
+                charges,
+                include_time_constraints=True,
+                match_hour=bool(self.screenshot_timezone),
+            ) if evidence.transaction_id else []
             # A wrong caption may resolve to a real customer with unrelated
-            # charges. Broaden only the identifier search to the bounded
-            # lookback in that case; never let a customer-scoped result hide a
-            # valid exact transaction identifier.
-            if not transaction_matches and evidence.transaction_id and customer_ids and evidence.payment_date is None:
-                charges = await self._charges_for_lookback(client)
-                transaction_matches = transaction_matches_for(charges)
+            # charges. Broaden only the identifier search to a bounded
+            # date/lookback query in that case; never let a customer-scoped
+            # result hide a valid exact transaction identifier.
+            if not transaction_matches and evidence.transaction_id and customer_ids:
+                charges = (
+                    await self._charges_for_day(client, start_timestamp, end_timestamp)
+                    if evidence.payment_date is not None
+                    else await self._charges_for_lookback(client)
+                )
+                transaction_matches = transaction_matches_for(
+                    charges,
+                    include_time_constraints=True,
+                    match_hour=bool(self.screenshot_timezone),
+                )
+            if not transaction_matches and evidence.transaction_id:
+                # The provider identifier is unique evidence. Relax only the
+                # display-time constraints after the strict match fails; the
+                # charge's amount, status, currency, and method remain gated.
+                transaction_matches = transaction_matches_for(
+                    charges,
+                    include_time_constraints=False,
+                    match_hour=False,
+                )
             transaction_id_match = False
             if len(transaction_matches) > 1:
                 result = StripeVerificationResult(
@@ -828,7 +1069,7 @@ class StripeVerifier:
                         charge,
                         evidence,
                         customer_ids,
-                        screenshot_zone or zone,
+                        match_zone,
                         require_identity=False,
                         include_time_constraints=True,
                         match_hour=bool(self.screenshot_timezone),
@@ -887,14 +1128,27 @@ class StripeVerifier:
                     email_hash=email_hash,
                 )
         except StripeVerificationError as exc:
-            result = StripeVerificationResult(
-                processing_id,
-                "ERROR",
-                "ERROR",
-                exc.reason_code,
-                email_hash=email_hash,
-                retryable=exc.retryable,
-            )
+            # A bounded search is intentionally never an approval. Report it
+            # as unclear so the WhatsApp layer uses the review reaction rather
+            # than presenting a pagination ceiling as a fake payment.
+            if exc.reason_code == "STRIPE_PAGINATION_LIMIT":
+                result = StripeVerificationResult(
+                    processing_id,
+                    "SEARCH_LIMITED",
+                    "UNCLEAR",
+                    exc.reason_code,
+                    email_hash=email_hash,
+                    retryable=False,
+                )
+            else:
+                result = StripeVerificationResult(
+                    processing_id,
+                    "ERROR",
+                    "ERROR",
+                    exc.reason_code,
+                    email_hash=email_hash,
+                    retryable=exc.retryable,
+                )
         finally:
             if owned_client:
                 await client.aclose()

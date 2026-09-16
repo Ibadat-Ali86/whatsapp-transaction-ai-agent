@@ -5,7 +5,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     AI_PROVIDER: str = 'groq'
     GROQ_API_KEY: SecretStr = SecretStr('')
-    GROQ_VISION_MODEL: str = 'qwen/qwen3.6-27b'
+    GROQ_VISION_MODEL: str = 'qwen/qwen3.8-27b'
+    GROQ_MAX_OUTPUT_TOKENS: int = 512
     GEMINI_API_KEY: SecretStr = SecretStr('')
     GEMINI_VISION_MODEL: str = 'gemini-1.5-flash'
     OCR_CONFIDENCE_THRESHOLD: float = 0.85

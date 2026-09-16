@@ -73,6 +73,90 @@ Per `docs/CHANGE_CONTROL.md`, agents must **never**:
 
 <!-- Append new change records below this line. Most recent first. -->
 
+### CC-0006 — Baileys Session Conflict Protection
+
+| Field              | Value |
+|--------------------|-------|
+| **ID**             | CC-0006 |
+| **Date**           | 2026-09-16 |
+| **Class**          | C2 |
+| **Agent**          | Codex |
+| **Requested by**   | Project owner |
+| **Phase**          | Phase 2 |
+| **Reason**         | Stop the reconnect loop caused by WhatsApp `connectionReplaced` conflicts and prevent multiple local bot processes from sharing one auth state. |
+| **Requirement**    | Reliability: reconnect behavior, single-session operation, incident recovery |
+| **Files changed**  | `src/whatsapp/connection.js`, `src/whatsapp/index.js`, `src/whatsapp/config.js`, `src/whatsapp/process-lock.js`, `.env.example`, `docs/ENVIRONMENT.md`, `docs/INCIDENT_RUNBOOK.md`, `docs/DEPLOYMENT_DIGITALOCEAN.md`, `tests/unit/whatsapp/baileys-compatibility.test.js`, `tests/unit/whatsapp/process-lock.test.js` |
+| **Behavior changed** | Disconnect reason `440`/`connectionReplaced` is treated as terminal and no longer auto-reconnects; active queues stop using a closed socket; queued work starts only after `connection=open`; a PID lock prevents concurrent local bot instances and recovers stale markers. Transient network disconnects retain bounded exponential reconnect. |
+| **Security impact** | Auth files are not deleted or modified beyond existing Baileys credential updates; the lock file contains only a local process ID. |
+| **Data impact**    | None; queued jobs and duplicate metadata are preserved. |
+| **Tests run**      | `npm run test:whatsapp` (47 passed before the startup-order adjustment); `node --check` for changed Node files (passed); second-start lock probe exited 1 with `BOT_ALREADY_RUNNING`; local Baileys reconnect behavior was observed. |
+| **Rollback**       | Revert CC-0006 changes; preserve the auth directory and queue/data volumes. |
+| **Documentation updated** | Yes — `.env.example`, `docs/ENVIRONMENT.md`, `docs/INCIDENT_RUNBOOK.md`, `docs/DEPLOYMENT_DIGITALOCEAN.md` |
+| **Status**         | COMPLETE |
+
+### CC-0005 — Timezone-Tolerant Stripe Evidence Recovery
+
+| Field              | Value |
+|--------------------|-------|
+| **ID**             | CC-0005 |
+| **Date**           | 2026-09-16 |
+| **Class**          | C2 |
+| **Agent**          | Codex |
+| **Requested by**   | Project owner |
+| **Phase**          | Phase 2 |
+| **Reason**         | Prevent valid Stripe payments from being downgraded to `⚠️` when receipt clocks differ from the configured Stripe account timezone or when Search is not yet indexed. |
+| **Requirement**    | PRD: FR-003, FR-004, FR-010; Stripe-authoritative verification and conservative ambiguity handling |
+| **Files changed**  | `src/verification/stripe_verifier.py`, `tests/unit/test_stripe_verifier.py` |
+| **Behavior changed** | Amount-bearing evidence now has a bounded same-day recovery pass that can relax only the potentially shifted receipt hour while retaining amount, date, minute, status, currency, payment method, and unique-match requirements. Email identity and provider transaction-ID fallbacks may relax OCR time constraints only when the remaining Stripe evidence is unique; Search-empty responses retain the bounded list fallback. |
+| **Security impact** | Read-only Stripe access is unchanged. Relaxed matching is conservative and never approves an ambiguous candidate or an ineligible charge. |
+| **Data impact**    | None; no payment records or secrets are persisted by this change. |
+| **Tests run**      | `.venv/bin/python -m pytest -q tests/unit/test_stripe_verifier.py` (29 passed). |
+| **Rollback**       | Revert CC-0005 changes; CC-0003 Stripe Search and bounded fallback behavior remains available. |
+| **Documentation updated** | Yes — this change record. |
+| **Status**         | COMPLETE |
+
+### CC-0004 — Robust WhatsApp Email Evidence Correlation
+
+| Field              | Value |
+|--------------------|-------|
+| **ID**             | CC-0004 |
+| **Date**           | 2026-09-16 |
+| **Class**          | C2 |
+| **Agent**          | Codex |
+| **Requested by**   | Project owner |
+| **Phase**          | Phase 2 |
+| **Reason**         | Accept real-world WhatsApp payment submissions with mixed captions, OCR-visible emails, and nearby email messages sent before or after an image. |
+| **Requirement**    | PRD: FR-003, FR-004, FR-010; optional caption and Stripe-authoritative verification requirements |
+| **Files changed**  | `src/whatsapp/caption-email.js`, `src/whatsapp/message-handler.js`, `docs/ENVIRONMENT.md`, `docs/TECHNICAL_SPEC.md`, `docs/N8N_WORKFLOW_SPEC.md`, `tests/unit/whatsapp/caption-email.test.js`, `tests/unit/whatsapp/message-handler.test.js` |
+| **Behavior changed** | One unambiguous email token is extracted from mixed image captions; exact email-only text messages from the same sender/group may be correlated within the configured window on either side of an image; Stripe remains the final verification authority. |
+| **Security impact** | Correlation remains restricted to the same group and sender, with a bounded time window; multiple addresses and arbitrary group text are rejected. |
+| **Data impact**    | None; no screenshots or plaintext email history is persisted by this change. |
+| **Tests run**      | `npm run test:whatsapp` (45 passed). |
+| **Rollback**       | Revert CC-0004 changes; existing Stripe/OCR behavior remains available. |
+| **Documentation updated** | Yes — `docs/ENVIRONMENT.md`, `docs/TECHNICAL_SPEC.md`, `docs/N8N_WORKFLOW_SPEC.md` |
+| **Status**         | COMPLETE |
+
+### CC-0003 — Narrowed Stripe Search for Captionless Receipts
+
+| Field              | Value |
+|--------------------|-------|
+| **ID**             | CC-0003 |
+| **Date**           | 2026-09-16 |
+| **Class**          | C2 |
+| **Agent**          | Codex |
+| **Requested by**   | Project owner |
+| **Phase**          | Phase 2 |
+| **Reason**         | Prevent large live Stripe accounts from missing valid captionless receipts because a broad charge-list scan reaches the configured pagination ceiling. |
+| **Requirement**    | PRD: FR-010; captionless Stripe recovery and timezone requirements |
+| **Files changed**  | `src/verification/stripe_verifier.py`, `src/whatsapp/config.js`, `src/whatsapp/message-handler.js`, `n8n/workflows/whatsapp-screenshot-processor_v2_20260910.json`, `n8n/workflows/whatsapp-screenshot-processor_v2_docker_20260915.json`, `scripts/smoke_n8n_adapter.js`, `docs/ENVIRONMENT.md`, `tests/unit/test_stripe_verifier.py`, `tests/unit/whatsapp/n8n-workflow.test.js`, `tests/unit/whatsapp/message-handler.test.js` |
+| **Behavior changed** | Amount-bearing evidence uses a server-side Stripe Charges Search query constrained by amount, currency, succeeded status, and a bounded time window; an empty Search result falls back to a bounded list query for eventual consistency; n8n resolves a `Today` receipt date in the configured Stripe timezone; local matching remains authoritative. |
+| **Security impact** | Read-only Stripe access remains unchanged; no secrets or payment payloads were added to workflow exports or logs. |
+| **Data impact** | None; only bounded in-memory response caching remains in use. |
+| **Tests run**      | `.venv/bin/python -m pytest -q` (116 passed); `npm run test:whatsapp` (42 passed); `npm run smoke:n8n` (passed with expected `⚠️` for intentionally skipped Stripe); workflow JSON parse and `git diff --check` (passed). |
+| **Rollback**       | Revert CC-0003 changes and re-import the prior v2 workflow export. |
+| **Documentation updated** | Yes — `docs/ENVIRONMENT.md` |
+| **Status**         | COMPLETE |
+
 ### CC-0002 — Phase 1 WhatsApp Ingestion & OCR Microservice Stack Implementation
 
 | Field              | Value |

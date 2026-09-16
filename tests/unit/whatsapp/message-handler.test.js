@@ -40,6 +40,18 @@ function captionedImageMessage(remoteJid, id = 'test-message-id') {
   return message;
 }
 
+function standaloneEmailMessage(remoteJid, email, id = 'email-message-id') {
+  return {
+    key: {
+      remoteJid,
+      fromMe: false,
+      id,
+      participant: '923000000000@s.whatsapp.net',
+    },
+    message: { conversation: email },
+  };
+}
+
 test('does not process an image from an unallowlisted group', async () => {
   let sendMessageCalled = false;
   const sock = {
@@ -112,6 +124,85 @@ test('processes a captionless image so Stripe can recover identity from OCR evid
   assert.deepEqual(events[1], { react: { text: '✅', key: imageMessage('1234567890-1234567890@g.us').key } });
 });
 
+test('associates a same-sender email message that follows a captionless image', async () => {
+  let lookupEmail;
+  const groupId = '1234567890-1234567890@g.us';
+  const image = imageMessage(groupId);
+  image.key.id = 'image-followed-by-email';
+  image.key.participant = '923000000000@s.whatsapp.net';
+  const handler = createMessageHandler({ sendMessage: async () => {} }, {
+    ALLOWED_GROUP_JIDS: [groupId],
+    BOT_REPLY_ENABLED: false,
+    BOT_REACTIONS_ENABLED: true,
+    N8N_ENABLED: false,
+    CAPTION_ASSOCIATION_WINDOW_MS: 1000,
+  }, logger, {
+    duplicateStore: duplicateStore(),
+    downloadImage: async () => ({ imageBytes: Buffer.from('follow-up-image'), mimeType: 'image/png', tempPath: null }),
+    processImageOCR: async params => {
+      lookupEmail = params.captionEmail;
+      return { fields: { amount_cents: 1000 }, verification: { verdict: 'VALID', stripe_charge_id: 'ch-follow-up' } };
+    },
+  });
+
+  const imageProcessing = handler({ messages: [image] });
+  await handler({ messages: [standaloneEmailMessage(groupId, 'vinny@example.com')] });
+  await imageProcessing;
+
+  assert.equal(lookupEmail, 'vinny@example.com');
+});
+
+test('associates a same-sender email message that precedes a captionless image', async () => {
+  let lookupEmail;
+  const groupId = '1234567890-1234567890@g.us';
+  const image = imageMessage(groupId);
+  image.key.id = 'image-preceded-by-email';
+  image.key.participant = '923000000000@s.whatsapp.net';
+  const handler = createMessageHandler({ sendMessage: async () => {} }, {
+    ALLOWED_GROUP_JIDS: [groupId],
+    BOT_REPLY_ENABLED: false,
+    BOT_REACTIONS_ENABLED: true,
+    N8N_ENABLED: false,
+    CAPTION_ASSOCIATION_WINDOW_MS: 1000,
+  }, logger, {
+    duplicateStore: duplicateStore(),
+    downloadImage: async () => ({ imageBytes: Buffer.from('preceding-email-image'), mimeType: 'image/png', tempPath: null }),
+    processImageOCR: async params => {
+      lookupEmail = params.captionEmail;
+      return { fields: { amount_cents: 1000 }, verification: { verdict: 'VALID', stripe_charge_id: 'ch-preceding-email' } };
+    },
+  });
+
+  await handler({ messages: [standaloneEmailMessage(groupId, 'before@example.com', 'email-before-image')] });
+  await handler({ messages: [image] });
+
+  assert.equal(lookupEmail, 'before@example.com');
+});
+
+test('extracts an email from a mixed image caption before Stripe lookup', async () => {
+  let lookupEmail;
+  const groupId = '1234567890-1234567890@g.us';
+  const image = captionedImageMessage(groupId, 'mixed-caption-image');
+  image.message.imageMessage.caption = '$2.91 christalrich7@gmail.com';
+  const handler = createMessageHandler({ sendMessage: async () => {} }, {
+    ALLOWED_GROUP_JIDS: [groupId],
+    BOT_REPLY_ENABLED: false,
+    BOT_REACTIONS_ENABLED: true,
+    N8N_ENABLED: false,
+  }, logger, {
+    duplicateStore: duplicateStore(),
+    downloadImage: async () => ({ imageBytes: Buffer.from('mixed-caption-image'), mimeType: 'image/png', tempPath: null }),
+    processImageOCR: async params => {
+      lookupEmail = params.captionEmail;
+      return { fields: { amount_cents: 291 }, verification: { verdict: 'VALID', stripe_charge_id: 'ch-mixed-caption' } };
+    },
+  });
+
+  await handler({ messages: [image] });
+
+  assert.equal(lookupEmail, 'christalrich7@gmail.com');
+});
+
 test('sends a captioned image through OCR once per message ID', async () => {
   let ocrCalls = 0;
   let reply;
@@ -182,6 +273,7 @@ test('routes a captioned image through n8n when enabled', async () => {
     REQUIRE_EMAIL_CAPTION: true,
     N8N_ENABLED: true,
     STRIPE_VERIFICATION_ENABLED: true,
+    STRIPE_TIMEZONE: 'America/Chicago',
   }, logger, {
     downloadImage: async () => ({ imageBytes: Buffer.from('synthetic-image'), mimeType: 'image/png', tempPath: null }),
     duplicateStore: duplicateStore(),
@@ -196,6 +288,7 @@ test('routes a captioned image through n8n when enabled', async () => {
   assert.equal(workflowPayload.source, 'whatsapp');
   assert.equal(workflowPayload.caption_email, 'customer@example.com');
   assert.equal(workflowPayload.stripe_verification_enabled, true);
+  assert.equal(workflowPayload.stripe_timezone, 'America/Chicago');
   assert.equal(workflowPayload.image.mime_type, 'image/png');
 });
 

@@ -70,7 +70,10 @@ const handler = createMessageHandler(sock, {
 
 handler({ messages: [message] })
   .then(() => {
-    assert.deepEqual(response?.react?.text, '❌');
+    // This smoke test intentionally disables Stripe in the handler config so
+    // it validates transport/OCR wiring only. A skipped Stripe gate is an
+    // unconfirmed result and therefore uses the production warning reaction.
+    assert.deepEqual(response?.react?.text, '⚠️');
     assert.equal(response?.react?.key?.id, message.key.id);
     console.log(JSON.stringify({
       ok: true,

@@ -2,7 +2,7 @@ const { generateProcessingId } = require('./processing-id');
 const { downloadImage } = require('./media-downloader');
 const { processImageOCR } = require('./ocr-client');
 const { formatOcrReply, formatDuplicateReply } = require('./reply-formatter');
-const { getImageCaption, normalizeCaptionEmail } = require('./caption-email');
+const { getImageCaption, getStandaloneTextEmail, normalizeCaptionEmail } = require('./caption-email');
 const { createIdempotencyStore } = require('./idempotency-store');
 const { processImageViaN8n } = require('./n8n-client');
 const fs = require('fs').promises;
@@ -29,6 +29,54 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
     phashMaxDistance: config.DUPLICATE_PHASH_MAX_DISTANCE || 6,
   });
   const groupNameCache = new Map();
+  const pendingCaptionEmails = new Map();
+  const captionAssociationWindowMs = Number.isInteger(config.CAPTION_ASSOCIATION_WINDOW_MS)
+    ? config.CAPTION_ASSOCIATION_WINDOW_MS
+    : 2000;
+  let messageSequence = 0;
+
+  const senderKey = message => message?.key?.participant || message?.key?.participantAlt || '';
+  const captionKey = (groupId, message) => `${groupId || ''}:${senderKey(message)}`;
+  const rememberStandaloneEmail = (groupId, message, sequence) => {
+    if (message?.key?.fromMe || !senderKey(message)) return;
+    const email = getStandaloneTextEmail(message);
+    if (!email) return;
+    const key = captionKey(groupId, message);
+    const cutoff = Date.now() - captionAssociationWindowMs;
+    const candidates = (pendingCaptionEmails.get(key) || [])
+      .filter(candidate => candidate.receivedAt >= cutoff);
+    candidates.push({ email, sequence, receivedAt: Date.now() });
+    pendingCaptionEmails.set(key, candidates.slice(-8));
+  };
+  const waitForFollowUpCaption = ms => ms > 0
+    ? new Promise(resolve => setTimeout(resolve, ms))
+    : Promise.resolve();
+  const takeAssociatedEmail = (groupId, message, imageSequence, imageReceivedAt) => {
+    const key = captionKey(groupId, message);
+    const candidates = pendingCaptionEmails.get(key) || [];
+    const eligible = candidates
+      .map((candidate, index) => ({ candidate, index }))
+      .filter(({ candidate }) => (
+        candidate.sequence !== imageSequence
+        && Math.abs(candidate.receivedAt - imageReceivedAt) <= captionAssociationWindowMs
+      ))
+      .sort((left, right) => {
+        const timeDistance = Math.abs(left.candidate.receivedAt - imageReceivedAt)
+          - Math.abs(right.candidate.receivedAt - imageReceivedAt);
+        return timeDistance || Math.abs(left.candidate.sequence - imageSequence)
+          - Math.abs(right.candidate.sequence - imageSequence);
+      });
+    if (!eligible.length) {
+      const cutoff = Date.now() - captionAssociationWindowMs;
+      pendingCaptionEmails.set(key, candidates.filter(candidate => candidate.receivedAt >= cutoff));
+      return null;
+    }
+    const [{ candidate: match, index }] = eligible;
+    candidates.splice(index, 1);
+    if (candidates.length) pendingCaptionEmails.set(key, candidates);
+    else pendingCaptionEmails.delete(key);
+    return match.email;
+  };
 
   const groupHash = groupId => hashGroupJid(groupId);
   const duplicateScope = (record, groupId) => record?.group_id_hash === groupHash(groupId) ? 'same_group' : 'another_group';
@@ -124,6 +172,7 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
         is_forwarded: Boolean(job.is_forwarded),
         caption_email: job.caption_email,
         stripe_verification_enabled: config.STRIPE_VERIFICATION_ENABLED === true,
+        stripe_timezone: config.STRIPE_TIMEZONE,
         image: { mime_type: downloadedMime, base64: imageBase64 },
       };
 
@@ -204,7 +253,16 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
         await sendReaction(groupId, message, verdict === 'VALID' ? '✅' : verdict === 'UNCLEAR' || !verdict ? '⚠️' : '❌');
       }
 
-      logger.info({ processingId: job.processing_id, duration_ms: Date.now() - startTime, verdict: finalResult?.verification?.verdict || 'UNVERIFIED' }, 'Message processing complete');
+      const verification = finalResult?.verification || {};
+      logger.info({
+        processingId: job.processing_id,
+        duration_ms: Date.now() - startTime,
+        verdict: verification.verdict || 'UNVERIFIED',
+        verification_status: verification.status || null,
+        verification_reason: verification.reason_code || null,
+        verification_candidate_count: Number.isInteger(verification.candidate_count) ? verification.candidate_count : null,
+        stripe_charge_id: verification.stripe_charge_id || null,
+      }, 'Message processing complete');
       return { status: 'COMPLETED', verdict: finalResult?.verification?.verdict || 'UNVERIFIED', processing_id: job.processing_id };
     } catch (error) {
       if (imageHash && error?.retryable !== true) error.imageHash = imageHash;
@@ -248,6 +306,15 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
   const handler = async messageUpdate => {
     try {
       const messages = messageUpdate?.messages || [];
+      const messageSequences = new Map();
+      for (const msg of messages) {
+        const sequence = ++messageSequence;
+        if (msg.key?.id) messageSequences.set(msg.key.id, sequence);
+        const groupId = msg.key?.remoteJid;
+        if (isAllowedGroupJid(groupId, config.ALLOWED_GROUP_JIDS)) {
+          rememberStandaloneEmail(groupId, msg, sequence);
+        }
+      }
       for (const msg of messages) {
         const groupId = msg.key?.remoteJid;
         if (!isAllowedGroupJid(groupId, config.ALLOWED_GROUP_JIDS)) {
@@ -266,11 +333,25 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
         }
 
         const captionEmail = normalizeCaptionEmail(getImageCaption(msg));
+        let effectiveCaptionEmail = captionEmail;
+        if (!effectiveCaptionEmail) {
+          const imageReceivedAt = Date.now();
+          await waitForFollowUpCaption(captionAssociationWindowMs);
+          effectiveCaptionEmail = takeAssociatedEmail(
+            groupId,
+            msg,
+            messageSequences.get(messageId) || 0,
+            imageReceivedAt,
+          );
+          if (effectiveCaptionEmail) {
+            logger.info({ messageId, groupIdHash: groupHash(groupId) }, 'Associated a nearby same-sender email message with the screenshot');
+          }
+        }
         const groupName = await resolveGroupName(groupId);
-        if (!captionEmail) logger.info({ messageId, groupIdHash: groupHash(groupId) }, 'No valid caption email; continuing with OCR and Stripe evidence recovery');
+        if (!effectiveCaptionEmail) logger.info({ messageId, groupIdHash: groupHash(groupId) }, 'No valid caption email; continuing with OCR and Stripe evidence recovery');
 
         const processingId = generateProcessingId();
-        const senderJid = msg.key.participant || msg.key.remoteJid;
+        const senderJid = senderKey(msg) || msg.key.remoteJid;
         const hashedJid = crypto.createHash('sha256').update(senderJid).digest('hex').substring(0, 10);
         const mimeType = msg.message.imageMessage?.mimetype || msg.message.extendedTextMessage?.contextInfo?.quotedMessage?.imageMessage?.mimetype || 'unknown';
         logger.info({ processingId, messageId, groupIdHash: hashGroupJid(groupId), senderJid: hashedJid, mimeType, queueDepth: queue.pendingCount }, 'Incoming image queued');
@@ -286,7 +367,7 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
           sender_jid: senderJid,
           received_at: new Date().toISOString(),
           is_forwarded: Boolean(msg.message?.imageMessage?.contextInfo?.isForwarded),
-          caption_email: captionEmail,
+          caption_email: effectiveCaptionEmail,
         };
 
         try {

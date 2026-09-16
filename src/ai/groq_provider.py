@@ -90,9 +90,14 @@ class GroqVisionProvider(VisionProvider):
                         ]
                     }
                 ],
-                # Qwen 3.6 supports JSON Object Mode. This prevents normal
-                # model prose/reasoning from being mixed into the extraction.
+                # The configured Qwen vision models support JSON Object Mode.
+                # This prevents normal model prose/reasoning from being mixed
+                # into the extraction.
                 response_format={"type": "json_object"},
+                # The extraction schema is deliberately small. Keep the
+                # provider request below low-tier output-token limits instead
+                # of accepting the SDK default, which can be 2048 tokens.
+                max_tokens=self.settings.GROQ_MAX_OUTPUT_TOKENS,
                 timeout=30.0,
                 temperature=0.0
             )

@@ -145,13 +145,28 @@ function createGroupMetadataCache() {
   };
 }
 
+function getStatusCode(error) {
+  if (error instanceof Boom) {
+    return error.output?.statusCode;
+  }
+
+  return error?.output?.statusCode ?? error?.statusCode;
+}
+
+function shouldReconnectForStatus(statusCode, disconnectReason) {
+  return statusCode !== disconnectReason.loggedOut
+    && statusCode !== disconnectReason.connectionReplaced;
+}
+
 /**
  * Creates and manages the Baileys WhatsApp connection
  * @param {object} options
  * @param {(socket: any) => void} options.onSocket - Called for the initial socket and every replacement socket.
+ * @param {(socket: any) => void} options.onConnectionOpened - Called after a socket reaches the open state.
+ * @param {(details: {socket: any, statusCode: number|undefined, terminal: boolean}) => void} options.onConnectionClosed - Called whenever a socket closes.
  * @returns {Promise<{socket: any, getSocket: () => any, stop: () => void}>}
  */
-async function createConnection({ onSocket } = {}) {
+async function createConnection({ onSocket, onConnectionOpened, onConnectionClosed } = {}) {
   const {
     makeWASocket,
     makeCacheableSignalKeyStore,
@@ -171,14 +186,6 @@ async function createConnection({ onSocket } = {}) {
   let reconnectTimer = null;
   let reconnectAttempt = 0;
   let stopped = false;
-
-  const getStatusCode = error => {
-    if (error instanceof Boom) {
-      return error.output?.statusCode;
-    }
-
-    return error?.output?.statusCode ?? error?.statusCode;
-  };
 
   const scheduleReconnect = () => {
     if (stopped || reconnectTimer) {
@@ -292,10 +299,18 @@ async function createConnection({ onSocket } = {}) {
       if (connection === 'close') {
         const statusCode = getStatusCode(lastDisconnect?.error);
         const isLoggedOut = statusCode === DisconnectReason.loggedOut;
+        const isConnectionReplaced = statusCode === DisconnectReason.connectionReplaced;
+        const shouldReconnect = shouldReconnectForStatus(statusCode, DisconnectReason);
 
-        logger.info({ reason: statusCode, shouldReconnect: !isLoggedOut }, 'Connection closed');
+        logger.info({ reason: statusCode, shouldReconnect }, 'Connection closed');
+        onConnectionClosed?.({ socket: sock, statusCode, terminal: isLoggedOut || isConnectionReplaced });
 
-        if (!isLoggedOut) {
+        if (isConnectionReplaced) {
+          logger.error(
+            { reason: statusCode },
+            'WhatsApp session was replaced by another linked device or bot process; automatic reconnect is paused. Stop the other session and restart this bot.',
+          );
+        } else if (!isLoggedOut) {
           scheduleReconnect();
         } else {
           logger.warn('Logged out from WhatsApp. Need to rescan QR code. Auth state is not deleted automatically.');
@@ -307,6 +322,7 @@ async function createConnection({ onSocket } = {}) {
           void refreshAllowedGroupMetadata(groupJid);
         }
         logger.info({ allowed_group_count: config.ALLOWED_GROUP_JIDS.length }, 'WhatsApp connection opened successfully.');
+        onConnectionOpened?.(sock);
       }
     });
 
@@ -332,4 +348,4 @@ async function createConnection({ onSocket } = {}) {
   };
 }
 
-module.exports = { createConnection };
+module.exports = { createConnection, getStatusCode, shouldReconnectForStatus };

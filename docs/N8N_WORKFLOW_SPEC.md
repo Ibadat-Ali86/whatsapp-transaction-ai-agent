@@ -26,7 +26,8 @@ Phase 2 Step 1 contract:
 - The Baileys adapter sends `POST /webhook/whatsapp-screenshot`.
 - The request must include `message_id`, `group_id`, `sender_jid`,
   `processing_id`, `caption_email`, and the image `{mime_type, base64}`.
-- `caption_email` is optional. When present and syntactically valid it is the
+- `caption_email` is optional. The WhatsApp adapter extracts one email token
+  from a caption even when additional text is present; when present it is the
   preferred lookup hint, not proof that a payment is valid. Missing, malformed,
   or stale captions are not treated as payment proof or a processing blocker.
 - The adapter sends an `X-Webhook-Token` header when configured. The n8n

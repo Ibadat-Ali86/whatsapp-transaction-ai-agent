@@ -77,15 +77,20 @@ This exercises the real message handler and n8n client with
 - Accepts structured evidence; Stripe credentials are loaded from server
   configuration and never from a request.
 - Requires a separate `X-Internal-Service-Token` before any Stripe call.
-- Uses read-only customer and charge list endpoints with pagination.
-- Requires test mode, normalized email, and a single eligible matching charge;
-  OCR amount/date/time are optional constraints. Ambiguity returns `UNCLEAR`.
+- Uses read-only customer and charge list endpoints with pagination. When the
+  caption email resolves to a Stripe customer, customer-scoped charges are
+  queried first without an OCR-date restriction; this keeps timezone-boundary
+  receipts discoverable. A bounded day/lookback scan is used only for
+  receipt-email or wrong-caption recovery.
+- Requires a mode-matched read-only secret, normalized email, and a single
+  eligible matching charge; OCR amount/date/time are optional constraints.
+  Ambiguity returns `UNCLEAR`.
 - Emits a safe audit event with a one-way email hash and no authorization data.
 - The real FastAPI endpoint was exercised against a disposable local
   Stripe-compatible fixture: missing internal token returned `401`, and a
   single exact Cash App fixture returned `VALID` with `EXACT_SINGLE_MATCH`.
 - The fixture observed only read-only `GET /v1/customers` and
-  `GET /v1/charges` requests with the configured day bounds.
+  `GET /v1/charges` requests with the configured bounds.
 
 The endpoint is intentionally disabled by default and has not yet been
 enabled by default. The v2 n8n export now contains the optional connection;

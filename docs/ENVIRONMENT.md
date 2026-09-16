@@ -7,12 +7,21 @@ Create .env locally from .env.example.
 AI_PROVIDER=groq
 
 GROQ_API_KEY=
-GROQ_VISION_MODEL=
+GROQ_VISION_MODEL=qwen/qwen3.8-27b
+GROQ_MAX_OUTPUT_TOKENS=512
 
 GEMINI_API_KEY=
 GEMINI_VISION_MODEL=
 
 OCR_CONFIDENCE_THRESHOLD=0.85
+CAPTION_ASSOCIATION_WINDOW_MS=2000
+
+When a payment image has no attached caption, the WhatsApp adapter associates a
+nearby email-only text message from the same group member, whether it arrived
+immediately before or after the image. Only that narrow same-group/same-sender
+correlation is allowed; arbitrary group messages are never used as payment
+identity. Image captions may contain one email token plus additional context
+such as an amount; multiple different addresses remain ambiguous.
 
 N8N_BASE_URL=http://localhost:5678
 N8N_WEBHOOK_PATH=/webhook/whatsapp-screenshot
@@ -46,12 +55,19 @@ WHATSAPP_ALLOWED_GROUP_JIDS=1234567890-1234567890@g.us,1234567890-9876543210@g.u
 - An empty allowlist is fail-closed: the bot can authenticate, but it will not process or reply to messages.
 - `WHATSAPP_TEST_GROUP_JID` remains supported as a legacy single-group setting.
 - The project is pinned to Baileys `7.0.0-rc14`; stop any old bot process before restarting after dependency changes.
+- `BOT_LOCK_PATH` is a local PID marker that prevents two bot processes from
+  sharing the same Baileys auth state and processing queue. Keep one bot
+  instance per auth directory; a stale marker is recovered automatically when
+  its recorded PID is no longer running.
 
 ## Stripe read-only verification
 
-The verifier is server-side and read-only. It only performs paginated GET
-requests for Customers and Charges. Keep the Stripe secret only in the OCR
-service environment; n8n receives only `STRIPE_SERVICE_TOKEN`.
+The verifier is server-side and read-only. It performs GET requests for
+Customers and Charges, using Stripe Charges Search for amount-bearing
+captionless receipts before falling back to a bounded list query when Search
+is unavailable or temporarily empty. Keep the
+Stripe secret only in the OCR service environment; n8n receives only
+`STRIPE_SERVICE_TOKEN`.
 
 STRIPE_ENABLED=false
 STRIPE_SECRET_KEY=
@@ -62,11 +78,23 @@ STRIPE_MODE=test
 STRIPE_API_BASE_URL=https://api.stripe.com
 STRIPE_API_VERSION=
 STRIPE_TIMEOUT_SECONDS=15
-STRIPE_TIMEZONE=UTC
-# Optional timezone printed by payment receipts, e.g. America/Chicago.
-# Leave empty for multi-group/multi-timezone operation; screenshot hour is then
-# diagnostic only and cannot reject a match. Minutes and date remain filters.
+# Stripe dashboard/account timestamps are US Central in this deployment.
+STRIPE_TIMEZONE=America/Chicago
+# Optional timezone printed by payment receipts, e.g. America/Chicago. Set this
+# when receipt clocks use the same timezone as the Stripe account. It allows
+# hour+minute matching. If an exact hour window returns no match, the verifier
+# performs one bounded same-day recovery pass that relaxes only the hour and
+# still requires amount/date/minute/status/currency/payment-method agreement
+# with exactly one eligible Stripe charge. Leave empty for mixed receipt zones.
 STRIPE_SCREENSHOT_TIMEZONE=
+# A receipt saying "Today" is resolved from the WhatsApp receive timestamp in
+# STRIPE_TIMEZONE by the n8n evidence-preparation node. This avoids scanning
+# the whole account for a current-day captionless payment while keeping the
+# final match anchored to Stripe's created timestamp.
+# Email-based verification queries the Stripe customer (without an OCR-date
+# restriction) first, then uses a bounded day/lookback scan only for recovery.
+# This avoids rejecting valid receipts whose displayed date crosses a timezone
+# boundary from Stripe's UTC-created timestamp.
 STRIPE_MAX_PAGES=10
 STRIPE_LOOKBACK_DAYS=90
 STRIPE_ALLOWED_PAYMENT_METHOD_TYPE=cashapp

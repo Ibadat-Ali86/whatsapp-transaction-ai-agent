@@ -21,6 +21,7 @@ function executeCodeNode(node, json, { state = {}, references = {} } = {}) {
     Date,
     Number,
     Object,
+    Intl,
     $getWorkflowStaticData: () => state,
     $: name => ({ first: () => ({ json: references[name] }) }),
   };
@@ -87,6 +88,8 @@ test('n8n v2 code nodes validate optional captions and prepare recoverable Strip
     source: 'whatsapp',
     message_id: 'message-001',
     caption_email: ' Customer@Example.com ',
+    received_at: '2026-09-16T18:00:00.000Z',
+    stripe_timezone: 'America/Chicago',
     stripe_verification_enabled: true,
     image: { mime_type: 'image/png', base64: 'aGVsbG8=' },
   };
@@ -183,4 +186,11 @@ test('n8n v2 code nodes validate optional captions and prepare recoverable Strip
   assert.equal(noEmail.stripe_request.payment_hour, 9);
   assert.equal(noEmail.stripe_request.payment_month, 8);
   assert.equal(noEmail.stripe_request.payment_day, 14);
+
+  const relativeToday = executeCodeNode(prepare, {
+    raw_text: 'Today at 6:33 PM',
+    confidence: 0.55,
+    fields: { amount_cents: 1500, minutes: '33', payment_hour: 18 },
+  }, { references: { 'Validate Event': { ...captionless, received_at: '2026-09-16T18:00:00.000Z', stripe_timezone: 'America/Chicago' } } })[0].json;
+  assert.equal(relativeToday.stripe_request.payment_date, '2026-09-16');
 });
