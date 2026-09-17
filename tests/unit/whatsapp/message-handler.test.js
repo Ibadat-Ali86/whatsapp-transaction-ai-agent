@@ -326,7 +326,7 @@ test('sends a captioned image through OCR once per message ID', async () => {
   assert.deepEqual(reply.react, { text: '✅', key: message.key });
 });
 
-test('uses a cross reaction and justification for an unresolved payment', async () => {
+test('uses a review reaction and justification for an unresolved payment', async () => {
   const replies = [];
   const sock = {
     sendMessage: async (_jid, content) => { replies.push(content); },
@@ -350,9 +350,9 @@ test('uses a cross reaction and justification for an unresolved payment', async 
   const message = imageMessage('1234567890-1234567890@g.us');
   await handler({ messages: [message] });
 
-  assert.match(replies[0].text, /Payment Not Confirmed/);
+  assert.match(replies[0].text, /Payment Requires Review/);
   assert.match(replies[0].text, /MULTIPLE_EXACT_MATCHES/);
-  assert.deepEqual(replies[1], { react: { text: '❌', key: message.key } });
+  assert.deepEqual(replies[1], { react: { text: '⚠️', key: message.key } });
 });
 
 test('routes a captioned image through n8n when enabled', async () => {

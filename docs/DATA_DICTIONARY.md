@@ -38,6 +38,13 @@ payment identifier label. It is an exact lookup hint and is compared against
 the Stripe charge ID, payment intent, balance transaction, source, supported
 Cash App fields, and approved transaction metadata keys.
 
+description
+Stripe charge description returned after a candidate is found. The current
+receipt format does not expose this field, so it is not required input for
+OCR. If a future screenshot or caption explicitly supplies it, it is
+normalized and compared exactly as an additional discriminator. It is never
+inferred from a dashboard screenshot, merchant name, or AI guess.
+
 amount_cents
 Integer monetary amount in cents.
 
@@ -104,8 +111,8 @@ stripe_reason_code
 Stable safe reason for the Stripe result.
 
 matched_transaction
-Canonical amount, local date/time, customer name, status, and payment method
-returned only for one eligible Stripe match.
+Canonical amount, local date/time, customer name, description, status, and
+payment method returned only for one eligible Stripe match.
 
 verdict
 VALID/FAKE/DUPLICATE/SUSPICIOUS/UNCLEAR/ERROR.

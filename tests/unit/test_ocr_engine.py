@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from src.ai.provider import AIProviderError
+from src.ai.provider import AIProviderError, AIExtractionResult
 from src.ocr import engine
 from src.ocr.engine import OCREngine
 from src.ocr.tesseract_processor import TesseractResult
@@ -93,3 +93,44 @@ def test_ai_provider_initialization_failure_returns_tesseract_result(monkeypatch
     assert result.error is None
     assert result.provider == "tesseract"
     assert result.fallback_reason == "AI_PROVIDER_CONFIGURATION_ERROR"
+
+
+def test_ai_cannot_invent_description_when_receipt_text_has_none(monkeypatch):
+    settings = SimpleNamespace(
+        AI_PROVIDER="groq",
+        MAX_IMAGE_SIZE_MB=10.0,
+        OCR_CONFIDENCE_THRESHOLD=0.85,
+    )
+    tesseract_result = TesseractResult(
+        raw_text="AQ Digital LLC\nPayment amount $20.00\nCompleted",
+        confidence=0.42,
+        word_count=6,
+        processing_time_ms=10,
+        preprocessing_strategy="basic",
+    )
+
+    class HallucinatingProvider:
+        name = "groq"
+
+        def extract_payment_fields(self, _image_bytes, _processing_id):
+            return AIExtractionResult(
+                provider_name="groq",
+                raw_text='{"amount":"$20.00","description":"Invented order"}',
+                fields={"amount": "$20.00", "description": "Invented order"},
+                confidence=1.0,
+                processing_time_ms=20,
+                model_used="unit-test",
+            )
+
+    monkeypatch.setattr(engine, "get_settings", lambda: settings)
+    monkeypatch.setattr(engine, "save_temp_image", lambda *_args: None)
+    monkeypatch.setattr(engine, "delete_temp_image", lambda _path: None)
+    monkeypatch.setattr(engine.TesseractProcessor, "extract", lambda *_args: tesseract_result)
+    monkeypatch.setattr(engine, "get_provider", lambda _name: HallucinatingProvider())
+
+    result = OCREngine.process_image(b"\xff\xd8\xffsynthetic", "wa-test-no-description", "image/jpeg")
+
+    assert result.error is None
+    assert result.ai_used is True
+    assert result.fields is not None
+    assert result.fields.description is None

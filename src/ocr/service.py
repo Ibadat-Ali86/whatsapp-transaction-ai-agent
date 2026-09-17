@@ -19,6 +19,7 @@ from src.verification.stripe_verifier import (
     StripeVerificationRuntime,
     StripeVerifier,
     normalize_email,
+    normalize_description,
     normalize_transaction_id,
 )
 
@@ -83,6 +84,7 @@ class StripeVerificationRequest(BaseModel):
     email: Optional[str] = Field(default=None, min_length=3, max_length=512)
     email_candidates: list[str] = Field(default_factory=list, max_length=8)
     transaction_id: Optional[str] = Field(default=None, min_length=4, max_length=128)
+    description: Optional[str] = Field(default=None, min_length=1, max_length=1000)
     amount_cents: Optional[int] = Field(default=None, gt=0, le=100_000_000)
     payment_date: Optional[date] = None
     minutes: Optional[int] = Field(default=None, ge=0, le=59)
@@ -122,6 +124,13 @@ class StripeVerificationRequest(BaseModel):
         if value is None or not value.strip():
             return None
         return normalize_transaction_id(value)
+
+    @field_validator("description")
+    @classmethod
+    def normalize_description(cls, value: Optional[str]) -> Optional[str]:
+        if value is None or not value.strip():
+            return None
+        return normalize_description(value)
 
     @field_validator("currency")
     @classmethod
@@ -199,6 +208,7 @@ async def process_ocr(request: OCRRequest):
         fields_dict = {
             "email": result.fields.email,
             "transaction_id": result.fields.transaction_id,
+            "description": result.fields.description,
             "amount_cents": result.fields.amount_cents,
             "minutes": result.fields.minutes,
             "payment_hour": result.fields.payment_hour,
@@ -267,6 +277,7 @@ async def verify_stripe(
         email=request.email,
         email_candidates=tuple(request.email_candidates),
         transaction_id=request.transaction_id,
+        description=request.description,
         amount_cents=request.amount_cents,
         payment_date=request.payment_date,
         minutes=request.minutes,

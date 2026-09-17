@@ -47,12 +47,24 @@ Phase 2 Step 1 contract:
   `email_candidates` alongside the caption hint so Stripe can choose the
   canonical identity. An exact transaction identifier can disambiguate
   simultaneous same-amount payments and recover from a wrong caption email.
-  Identifier
+  The verifier first applies all available receipt constraints (date or
+  month/day, minute, and configured receipt hour) even on the customer-scoped
+  email path. It only falls back to timezone-tolerant minute matching and then
+  identity-only matching when the stricter pass has no result. This prevents
+  same-email/same-amount charges from being reported as ambiguous when the
+  receipt clock uniquely identifies one charge, while preserving fail-closed
+  behavior when multiple charges genuinely remain eligible. Identifier
   collisions remain UNCLEAR; if OCR produces an identifier that does not
   resolve, the verifier falls back to the normal safe email/evidence path
   rather than treating the OCR hint alone as a rejection.
+  Stripe `description` is fetched and returned with the unique matched
+  transaction; it is not expected in the current receipt screenshots and is
+  never fabricated by the AI extractor. It can disambiguate only when the
+  submitted evidence explicitly contains the same description.
   Textual receipt dates such as `Aug 14` are sent as `payment_month` and
-  `payment_day`. For multi-group operation, leave
+  `payment_day`; when `received_at` and the configured Stripe timezone make
+  the year unambiguous, v2 also derives a bounded `payment_date` for the
+  lookup. For multi-group operation, leave
   `STRIPE_SCREENSHOT_TIMEZONE` empty so receipt hours from different local
   zones cannot cause a false rejection; amount, date/month-day, and minute
   constraints remain fail-closed filters. Configure that timezone only when

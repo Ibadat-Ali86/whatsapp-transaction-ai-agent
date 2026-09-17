@@ -16,6 +16,7 @@ Return ONLY valid JSON with these exact keys (use null for missing fields):
 {
   "email": "<email address or null>",
   "transaction_id": "<payment or transaction identifier exactly as shown, or null>",
+  "description": "<value next to an explicit Description label, exactly as shown, or null>",
   "amount": "<amount string like '$25.00' or null>",
   "minutes": "<2-digit minute component of payment time, e.g. '31', or null>",
   "payment_hour": "<24-hour local payment hour 0-23, or null>",
@@ -26,7 +27,10 @@ Return ONLY valid JSON with these exact keys (use null for missing fields):
   "status": "<payment status text like 'Completed' or null>"
 }
 
-Return ONLY the JSON object. No explanation, no markdown."""
+Important: do not use the merchant name, payment method, customer name, or
+any unlabeled text as the description. Return null unless the screenshot
+explicitly labels the value as Description. Return ONLY the JSON object. No
+explanation, no markdown."""
 
 
 def parse_json_object(raw_text: str) -> Dict[str, Any]:

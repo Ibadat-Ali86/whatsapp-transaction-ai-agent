@@ -28,6 +28,7 @@ def charge(charge_id: str = "ch_match", **overrides):
         "refunded": False,
         "customer": "cus_customer",
         "receipt_email": None,
+        "description": "Order 001",
         "payment_method_details": {"type": "cashapp"},
     }
     value.update(overrides)
@@ -55,10 +56,11 @@ async def verify_with_responses(responses, evidence_value=None, **verifier_optio
 
     transport = httpx.MockTransport(handler)
     async with httpx.AsyncClient(transport=transport) as client:
+        timezone_name = verifier_options.pop("timezone_name", "UTC")
         verifier = StripeVerifier(
             "sk_test_unit_test_key",
             http_client=client,
-            timezone_name="UTC",
+            timezone_name=timezone_name,
             **verifier_options,
         )
         result = await verifier.verify(evidence_value or evidence(), "wa-test-stripe")
@@ -107,6 +109,7 @@ async def test_email_only_lookup_returns_canonical_stripe_transaction():
     assert result.matched_transaction["amount_cents"] == 2500
     assert result.matched_transaction["payment_date"] == "2026-09-09"
     assert result.matched_transaction["minutes"] == 31
+    assert result.matched_transaction["description"] == "Order 001"
 
 
 @pytest.mark.asyncio
@@ -135,6 +138,45 @@ async def test_captionless_lookup_recovers_canonical_customer_from_amount_and_ti
     assert result.reason_code == "EXACT_SINGLE_MATCH"
     assert result.matched_transaction["customer_email"] == "recovered@example.com"
     assert len(requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_captionless_month_day_receipt_at_midnight_matches_us_central_charge():
+    charge_created = int(datetime(2026, 9, 12, 4, 58, tzinfo=timezone.utc).timestamp())
+
+    def responses(request):
+        assert request.url.path == "/v1/charges/search"
+        assert "amount:500" in request.url.params["query"]
+        return httpx.Response(200, json={
+            "data": [charge(
+                "ch_sep_11_late",
+                amount=500,
+                created=charge_created,
+                customer=None,
+                receipt_email="recovered@example.com",
+            )],
+            "has_more": False,
+        })
+
+    result, _ = await verify_with_responses(
+        responses,
+        timezone_name="America/Chicago",
+        screenshot_timezone="America/Chicago",
+        evidence_value=PaymentEvidence(
+            email=None,
+            amount_cents=500,
+            payment_month=9,
+            payment_day=11,
+            minutes=58,
+            payment_hour=23,
+        ),
+    )
+
+    assert result.verdict == "VALID"
+    assert result.reason_code == "EXACT_SINGLE_MATCH"
+    assert result.stripe_charge_id == "ch_sep_11_late"
+    assert result.matched_transaction["payment_date"] == "2026-09-11"
+    assert result.matched_transaction["payment_time"] == "23:58"
 
 
 @pytest.mark.asyncio
@@ -439,6 +481,59 @@ async def test_transaction_id_disambiguates_same_amount_and_time_charges():
 
 
 @pytest.mark.asyncio
+async def test_description_disambiguates_same_email_amount_and_time_charges():
+    def responses(request):
+        if request.url.path == "/v1/customers":
+            return httpx.Response(200, json={"data": [{"id": "cus_customer", "email": "customer@example.com"}]})
+        assert request.url.path == "/v1/charges"
+        return httpx.Response(200, json={
+            "data": [
+                charge("ch_order_001", description="Order 001"),
+                charge("ch_order_002", description="Order 002"),
+            ],
+            "has_more": False,
+        })
+
+    result, _ = await verify_with_responses(
+        responses,
+        evidence_value=evidence(description="  Order   002 "),
+    )
+
+    assert result.status == "MATCHED"
+    assert result.verdict == "VALID"
+    assert result.reason_code == "EXACT_SINGLE_MATCH"
+    assert result.stripe_charge_id == "ch_order_002"
+    assert result.matched_transaction["description"] == "Order 002"
+
+
+@pytest.mark.asyncio
+async def test_captionless_amount_and_description_can_recover_one_charge():
+    def responses(request):
+        assert request.url.path == "/v1/charges/search"
+        return httpx.Response(200, json={
+            "data": [charge(
+                customer=None,
+                receipt_email="recovered@example.com",
+                description="Order 002",
+            )],
+            "has_more": False,
+        })
+
+    result, _ = await verify_with_responses(
+        responses,
+        evidence_value=PaymentEvidence(
+            email=None,
+            amount_cents=2500,
+            description="Order 002",
+        ),
+    )
+
+    assert result.verdict == "VALID"
+    assert result.reason_code == "EXACT_SINGLE_MATCH"
+    assert result.matched_transaction["customer_email"] == "recovered@example.com"
+
+
+@pytest.mark.asyncio
 async def test_captionless_lookup_with_one_constraint_is_unclear_without_network_call():
     result, requests = await verify_with_responses(
         lambda _request: httpx.Response(500),
@@ -480,7 +575,13 @@ async def test_ambiguous_exact_matches_fail_closed():
     def responses(request):
         if request.url.path == "/v1/customers":
             return httpx.Response(200, json={"data": [{"id": "cus_customer", "email": "customer@example.com"}]})
-        return httpx.Response(200, json={"data": [charge("ch_one"), charge("ch_two")], "has_more": False})
+        return httpx.Response(200, json={
+            "data": [
+                charge("ch_one", description="Order 001"),
+                charge("ch_two", description="Order 002"),
+            ],
+            "has_more": False,
+        })
 
     result, _ = await verify_with_responses(responses)
 
@@ -512,6 +613,35 @@ async def test_email_and_amount_use_receipt_minute_to_disambiguate_customer_char
 
     assert result.verdict == "VALID"
     assert result.stripe_charge_id == "ch_right_minute"
+
+
+@pytest.mark.asyncio
+async def test_customer_matching_uses_receipt_date_and_hour_before_broad_fallback():
+    def responses(request):
+        if request.url.path == "/v1/customers":
+            return httpx.Response(200, json={"data": [{"id": "cus_customer", "email": "customer@example.com"}]})
+        assert request.url.path == "/v1/charges"
+        assert request.url.params["customer"] == "cus_customer"
+        return httpx.Response(200, json={
+            "data": [
+                # Same customer, amount, and minute, but a different receipt
+                # hour. This used to remain ambiguous because the
+                # customer-scoped path ignored the receipt date/hour.
+                charge("ch_wrong_hour", created=stripe_timestamp(hour=15, minute=31)),
+                charge("ch_right_receipt", created=stripe_timestamp(hour=14, minute=31)),
+            ],
+            "has_more": False,
+        })
+
+    result, _ = await verify_with_responses(
+        responses,
+        screenshot_timezone="UTC",
+        evidence_value=evidence(payment_hour=14, minutes=31),
+    )
+
+    assert result.status == "MATCHED"
+    assert result.verdict == "VALID"
+    assert result.stripe_charge_id == "ch_right_receipt"
 
 
 @pytest.mark.asyncio

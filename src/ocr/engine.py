@@ -79,6 +79,12 @@ class OCREngine:
                 ai_result = provider.extract_payment_fields(image_bytes, processing_id)
                 
                 ai_fields = FieldExtractor.extract_from_ai_response(ai_result.fields, processing_id)
+                # Description is not present on the current receipt format.
+                # Do not let a vision model invent one and use it as a hard
+                # Stripe filter. If a future receipt explicitly exposes a
+                # Description label, only the deterministic Tesseract text
+                # may authorize that constraint.
+                ai_fields.description = fields.description
                 ai_confidence = FieldExtractor.compute_confidence(ai_fields)
                 
                 duration = int((time.time() - start_time) * 1000)

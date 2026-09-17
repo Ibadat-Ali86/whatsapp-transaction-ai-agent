@@ -287,7 +287,12 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
             text: formatVerificationFailureReply(finalResult, job.processing_id),
           }, { quoted: message });
         }
-        await sendReaction(groupId, message, verdict === 'VALID' ? '✅' : '❌');
+        // An ambiguous or operationally incomplete Stripe result is not proof
+        // of fraud. Keep the client-requested cross for a confirmed
+        // non-match/error, but use a review warning for UNCLEAR so a valid
+        // payment is not visually labeled as fake while it needs review.
+        const reaction = verdict === 'VALID' ? '✅' : verdict === 'UNCLEAR' ? '⚠️' : '❌';
+        await sendReaction(groupId, message, reaction);
       }
 
       const verification = finalResult?.verification || {};

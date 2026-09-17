@@ -129,6 +129,7 @@ test('n8n v2 code nodes validate optional captions and prepare recoverable Strip
     fields: {
       email: 'different@example.com',
       transaction_id: 'FQ2JKTVZ0',
+      description: 'Order 002',
       amount_cents: 2500,
       minutes: '31',
       payment_date: '2026-09-09',
@@ -141,6 +142,7 @@ test('n8n v2 code nodes validate optional captions and prepare recoverable Strip
     'different@example.com',
   ]);
   assert.equal(ocrEmailDiffers.stripe_request.transaction_id, 'FQ2JKTVZ0');
+  assert.equal(ocrEmailDiffers.stripe_request.description, 'Order 002');
 
   const ready = executeCodeNode(prepare, {
     confidence: 1,
@@ -155,6 +157,7 @@ test('n8n v2 code nodes validate optional captions and prepare recoverable Strip
   assert.equal(ready.stripe_request.email, 'customer@example.com');
   assert.deepEqual(Array.from(ready.stripe_request.email_candidates), ['customer@example.com']);
   assert.equal(ready.stripe_request.transaction_id, null);
+  assert.equal(ready.stripe_request.description, null);
   assert.equal(ready.stripe_request.amount_cents, 2500);
 
   const lowConfidence = executeCodeNode(prepare, {
@@ -191,6 +194,7 @@ test('n8n v2 code nodes validate optional captions and prepare recoverable Strip
   assert.equal(noEmail.stripe_request.payment_hour, 9);
   assert.equal(noEmail.stripe_request.payment_month, 8);
   assert.equal(noEmail.stripe_request.payment_day, 14);
+  assert.equal(noEmail.stripe_request.payment_date, '2026-08-14');
 
   const relativeToday = executeCodeNode(prepare, {
     raw_text: 'Today at 6:33 PM',

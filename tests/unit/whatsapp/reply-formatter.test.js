@@ -102,7 +102,7 @@ test('formats duplicate and unclear screenshot statuses safely', () => {
   assert.doesNotMatch(unclear, /⚠️ Screenshot Status/);
 });
 
-test('formats a non-confirmed payment with a cross justification', () => {
+test('formats an ambiguous payment as review-required rather than fake', () => {
   const reply = formatVerificationFailureReply({
     verification: {
       verdict: 'UNCLEAR',
@@ -111,11 +111,11 @@ test('formats a non-confirmed payment with a cross justification', () => {
     },
   }, 'wa-unconfirmed');
 
-  assert.match(reply, /❌ \*Payment Not Confirmed\*/);
+  assert.match(reply, /⚠️ \*Payment Requires Review\*/);
   assert.match(reply, /multiple eligible payments/);
   assert.match(reply, /Verification reason: MULTIPLE_EXACT_MATCHES/);
   assert.match(reply, /Stripe candidates reviewed: 2/);
-  assert.doesNotMatch(reply, /⚠️/);
+  assert.match(reply, /not a fraud determination/);
 });
 
 test('makes local OCR fallback visible without exposing provider details', () => {

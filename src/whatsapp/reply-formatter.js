@@ -19,6 +19,7 @@ function formatOcrReply(ocrResult, processingId, captionEmail = null) {
   const minutes = stripeTransaction.minutes ?? fields.minutes ?? 'Not found';
   const dateStr = stripeTransaction.payment_date || fields.payment_date || fields.date || 'Not found';
   const name = stripeTransaction.customer_name || fields.customer_name || fields.name || 'Not found';
+  const description = stripeTransaction.description || fields.description || 'Not found';
   const status = stripeTransaction.status || fields.status || 'Not found';
   const confidence = ocrResult?.confidence != null ? Math.round(ocrResult.confidence * 100) : 0;
   const provider = ocrResult?.provider || 'tesseract';
@@ -40,6 +41,7 @@ function formatOcrReply(ocrResult, processingId, captionEmail = null) {
   reply += `⏱ Minutes: ${minutes}\n`;
   reply += `📅 Date: ${dateStr}\n`;
   reply += `👤 Name: ${name}\n`;
+  reply += `📝 Description: ${description}\n`;
   reply += `✅ Status: ${status}\n\n`;
   reply += `${screenshotStatus === 'ORIGINAL / VALID' ? '✅' : screenshotStatus === 'DUPLICATE' ? '♻️' : '❌'} Screenshot Status: ${screenshotStatus}\n`;
   if (verification?.duplicate_of_processing_id) {
@@ -87,6 +89,7 @@ function formatOcrReply(ocrResult, processingId, captionEmail = null) {
 function formatVerificationFailureReply(ocrResult, processingId) {
   const verification = ocrResult?.verification || {};
   const reason = verification.reason_code || 'VERIFICATION_NOT_CONFIRMED';
+  const isUnclear = verification.verdict === 'UNCLEAR';
   const candidateCount = Number.isInteger(verification.candidate_count)
     ? verification.candidate_count
     : null;
@@ -104,7 +107,11 @@ function formatVerificationFailureReply(ocrResult, processingId) {
     PROCESSING_QUEUE_FULL: 'The payment could not be queued because the processing queue was full; the payment was not approved.',
   }[reason] || 'Stripe did not return one unique eligible succeeded payment for the submitted evidence.';
 
-  return `❌ *Payment Not Confirmed*\n📋 Processing ID: ${processingId}\n\n${reasonText}\n🧾 Verification reason: ${reason}\n📊 Stripe candidates reviewed: ${candidateCount ?? 'not available'}\n\nNo payment was approved. Please review the screenshot details and Stripe record.`;
+  const heading = isUnclear ? '⚠️ *Payment Requires Review*' : '❌ *Payment Not Confirmed*';
+  const conclusion = isUnclear
+    ? 'This is not a fraud determination. No payment was approved because the available evidence did not identify exactly one Stripe record.'
+    : 'No payment was approved. Please review the screenshot details and Stripe record.';
+  return `${heading}\n📋 Processing ID: ${processingId}\n\n${reasonText}\n🧾 Verification reason: ${reason}\n📊 Stripe candidates reviewed: ${candidateCount ?? 'not available'}\n\n${conclusion}`;
 }
 
 /**

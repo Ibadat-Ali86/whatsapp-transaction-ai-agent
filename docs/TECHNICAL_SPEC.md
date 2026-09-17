@@ -114,6 +114,7 @@ OCR result:
   "fields": {
     "email": null,
     "transaction_id": null,
+    "description": null,
     "amount": null,
     "minutes": null,
     "payment_date": null,
@@ -139,6 +140,7 @@ Stripe verification request:
   "processing_id": "...",
   "email": "customer@example.com",
   "email_candidates": ["customer@example.com", "ocr@example.com"],
+  "description": "Order 002",
   "amount_cents": 2500,
   "payment_date": "2026-09-09",
   "minutes": 31,

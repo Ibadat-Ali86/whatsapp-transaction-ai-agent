@@ -7,6 +7,7 @@ from decimal import Decimal
 class ExtractedFields:
     email: Optional[str] = None
     transaction_id: Optional[str] = None
+    description: Optional[str] = None
     amount_cents: Optional[int] = None
     minutes: Optional[str] = None
     payment_hour: Optional[int] = None
@@ -49,6 +50,19 @@ class FieldExtractor:
         )
         if transaction_match:
             fields.transaction_id = transaction_match.group(1)
+
+        # Only capture a description when the receipt/OCR explicitly labels
+        # it. Merchant names and free-form surrounding text are not treated as
+        # Stripe descriptions because they are commonly shared by payments.
+        description_match = re.search(
+            r'\bdescription\b\s*[:=-]?\s*(.+)',
+            raw_text,
+            re.IGNORECASE,
+        )
+        if description_match:
+            description = description_match.group(1).strip()
+            if description:
+                fields.description = description[:1000]
             
         # Amount
         amount_match = re.search(r'\$\s*(\d+(?:\.\d{2})?)', raw_text)
@@ -131,6 +145,12 @@ class FieldExtractor:
             normalized_transaction_id = str(transaction_id).strip()
             if 4 <= len(normalized_transaction_id) <= 128:
                 fields.transaction_id = normalized_transaction_id
+
+        description = ai_json.get('description')
+        if description is not None:
+            normalized_description = str(description).strip()
+            if normalized_description:
+                fields.description = normalized_description[:1000]
         
         amount_str = ai_json.get('amount')
         if amount_str:

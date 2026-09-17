@@ -47,6 +47,18 @@ class TestTransactionIdExtraction:
         )
         assert fields.transaction_id == "FQ2JKTVZ0"
 
+    def test_extracts_explicit_description_only(self):
+        fields = FieldExtractor.extract_from_text(
+            "Description: Order 002\nAmount: $20.00", "test-pid-008"
+        )
+        assert fields.description == "Order 002"
+
+    def test_ignores_unlabeled_merchant_text_as_description(self):
+        fields = FieldExtractor.extract_from_text(
+            "Purchase from AQ Digital LLC\nAmount: $20.00", "test-pid-009"
+        )
+        assert fields.description is None
+
     def test_ignores_unlabeled_reference_like_text(self):
         fields = FieldExtractor.extract_from_text(
             "Reference FQ2JKTVZ0\nAmount: $20.00", "test-pid-007"
@@ -249,6 +261,7 @@ class TestAIResponseParsing:
         ai_json = {
             "email": "user@example.com",
             "transaction_id": "FQ2JKTVZ0",
+            "description": "Order 002",
             "amount": "$25.00",
             "minutes": "31",
             "payment_hour": "9",
@@ -261,6 +274,7 @@ class TestAIResponseParsing:
         fields = FieldExtractor.extract_from_ai_response(ai_json, "test-pid-050")
         assert fields.email == "user@example.com"
         assert fields.transaction_id == "FQ2JKTVZ0"
+        assert fields.description == "Order 002"
         assert fields.amount_cents == 2500
         assert isinstance(fields.amount_cents, int)
         assert fields.minutes == "31"

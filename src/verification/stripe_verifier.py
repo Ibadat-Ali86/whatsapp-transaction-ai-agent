@@ -53,6 +53,11 @@ class PaymentEvidence:
     # mistyped caption cannot hide the canonical Stripe customer.
     email_candidates: tuple[str, ...] = ()
     transaction_id: Optional[str] = None
+    # Optional exact Stripe description/reference supplied by trusted evidence.
+    # The current receipt format does not expose it, so normal verification
+    # must not require it; a dashboard-only description cannot be inferred
+    # from amount and email.
+    description: Optional[str] = None
     amount_cents: Optional[int] = None
     payment_date: Optional[date] = None
     minutes: Optional[int] = None
@@ -210,6 +215,13 @@ def normalize_transaction_id(value: str) -> str:
     if not TRANSACTION_ID_PATTERN.fullmatch(normalized):
         raise ValueError("invalid transaction id")
     return normalized
+
+
+def normalize_description(value: str) -> str:
+    normalized = " ".join(value.strip().split())
+    if not normalized or len(normalized) > 1000:
+        raise ValueError("invalid description")
+    return normalized.casefold()
 
 
 def _email_hash(email: Optional[str]) -> Optional[str]:
@@ -670,6 +682,12 @@ class StripeVerifier:
 
         if evidence.amount_cents is not None and charge.get("amount") != evidence.amount_cents:
             return False
+        if evidence.description is not None:
+            charge_description = charge.get("description")
+            if not isinstance(charge_description, str):
+                return False
+            if normalize_description(charge_description) != evidence.description:
+                return False
         if str(charge.get("currency", "")).casefold() != evidence.currency:
             return False
         if charge.get("paid") is not True or charge.get("refunded") is True:
@@ -732,6 +750,7 @@ class StripeVerifier:
             "payment_time": local_created.strftime("%H:%M"),
             "customer_name": customer_name,
             "customer_email": customer_email,
+            "description": charge.get("description") if isinstance(charge.get("description"), str) else None,
             "status": "Completed" if charge.get("paid") is True and charge.get("status") == "succeeded" else charge.get("status"),
             "payment_method_type": payment_method_type,
         }
@@ -750,6 +769,7 @@ class StripeVerifier:
         return sum(
             (
                 evidence.amount_cents is not None,
+                evidence.description is not None,
                 date_constraint,
                 evidence.minutes is not None,
                 bool(self.screenshot_timezone) and evidence.payment_hour is not None,
@@ -771,11 +791,15 @@ class StripeVerifier:
             normalized_transaction_id = None
             if evidence.transaction_id is not None and evidence.transaction_id.strip():
                 normalized_transaction_id = normalize_transaction_id(evidence.transaction_id)
+            normalized_description = None
+            if evidence.description is not None and evidence.description.strip():
+                normalized_description = normalize_description(evidence.description)
             evidence = replace(
                 evidence,
                 email=normalized_email,
                 email_candidates=tuple(normalized_email_candidates),
                 transaction_id=normalized_transaction_id,
+                description=normalized_description,
                 currency=evidence.currency.casefold(),
                 payment_method_type=evidence.payment_method_type.casefold(),
             )
@@ -934,9 +958,17 @@ class StripeVerifier:
 
             matches = matches_for(
                 charges,
-                include_time_constraints=not bool(identity_emails),
+                # Apply every trustworthy receipt constraint before deciding
+                # that an email/amount pair is ambiguous.  The previous
+                # customer-scoped path skipped date/hour and checked only the
+                # minute, so two same-email/same-amount charges could survive
+                # even when the screenshot contained a unique day and clock.
+                # ``match_hour`` remains gated by the explicitly configured
+                # receipt timezone; date/month-day/minute are safe local
+                # constraints in either configuration.
+                include_time_constraints=True,
                 match_hour=bool(self.screenshot_timezone),
-                match_minute=bool(evidence.email),
+                match_minute=False,
             )
 
             # A receipt clock can differ from the Stripe account clock even
@@ -985,6 +1017,17 @@ class StripeVerifier:
             # fallback when a receipt minute was OCR'd incorrectly or belongs
             # to a different display timezone. It only proceeds when the
             # identity/amount/status/payment-method match is unique.
+            if not matches and identity_emails:
+                # First tolerate only a date/hour conversion issue while
+                # retaining the receipt minute. This resolves a valid charge
+                # when the screenshot clock is in a nearby timezone without
+                # jumping immediately to an email-only approval.
+                matches = matches_for(
+                    charges,
+                    include_time_constraints=False,
+                    match_hour=False,
+                    match_minute=evidence.minutes is not None,
+                )
             if not matches and identity_emails:
                 matches = matches_for(
                     charges,
