@@ -9,6 +9,27 @@ This document serves two functions:
 
 Reference: `docs/CHANGE_CONTROL.md` contains the governing policy rules. This file is the agent-facing operational log.
 
+### CC-0009 — Production Deployment Hardening
+
+| Field              | Value |
+|--------------------|-------|
+| **ID**             | CC-0009 |
+| **Date**           | 2026-09-17 |
+| **Class**          | C2/C3 |
+| **Agent**          | Codex |
+| **Requested by**   | Project owner |
+| **Phase**          | Production preparation |
+| **Reason**         | Prepare the single-Droplet Docker deployment for an approved 5–8 group pilot with safe configuration validation, persistent-state backups, and bounded container logs. |
+| **Requirement**    | Production deployment readiness and DigitalOcean rollout guidance |
+| **Files changed**  | `.gitignore`, `compose.production.yml`, `deploy/validate-production.sh`, `deploy/backup-production.sh`, `deploy/env/*.env.example`, `docs/DEPLOYMENT_DIGITALOCEAN.md`, `n8n/README.md` |
+| **Behavior changed** | Production Compose services now rotate Docker JSON logs, use the pinned stable n8n v1 image `1.123.80`, validate required env files/permissions/live Stripe mode without printing secrets, and provide persistent-state backup tooling. |
+| **Security impact** | Secrets remain runtime-only; validation never echoes values; backups are created with restrictive permissions and must be stored privately. |
+| **Data impact**    | Backups include WhatsApp auth, queue/duplicate metadata, and encrypted n8n state; raw screenshots are not backed up. |
+| **Tests run**      | Shell syntax checks, compose YAML parse, full Node/Python suites, and secret-scan review. Docker runtime build is pending on a host with Docker installed. |
+| **Rollback**       | Revert CC-0009 files; retain existing volumes. Do not delete `bot_auth`, `bot_data`, or `n8n_data`. |
+| **Documentation updated** | Yes — `docs/DEPLOYMENT_DIGITALOCEAN.md` |
+| **Status**         | IN PROGRESS until a DigitalOcean host completes the pilot acceptance sequence |
+
 ---
 
 ## Change Classification

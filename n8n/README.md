@@ -24,6 +24,9 @@ fixtures are still required before production activation.
 For the single-Droplet Compose deployment, import
 `workflows/whatsapp-screenshot-processor_v2_docker_20260915.json`. It targets
 the private Docker service name `ocr:8000` instead of `localhost:8000`.
+The production Compose stack pins n8n to `1.123.80`, the current stable v1
+line used for the deployment baseline. After startup, import and activate the
+workflow, then run the documented smoke tests before enabling live groups.
 
 For a repeatable local adapter check, start the OCR service and imported n8n
 workflow, then run `N8N_BASE_URL=http://127.0.0.1:5678

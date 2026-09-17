@@ -148,3 +148,12 @@ tests/fixtures/ocr/raw_client/
 *.backup
 *.orig
 *.tmp
+
+# ---------------------------------------------------------------------------
+# DEPLOYMENT TEMPLATES
+# Keep non-secret templates in Git; real deployment env files stay ignored.
+# ---------------------------------------------------------------------------
+!deploy/
+!deploy/env/
+deploy/env/*.env
+!deploy/env/*.env.example
