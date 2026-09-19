@@ -104,6 +104,12 @@ Processing ID of the first accepted occurrence when a duplicate is detected.
 stripe_charge_id
 Matching Stripe charge ID.
 
+claimed_stripe_charge_ids
+Bounded internal list of Stripe charge IDs already claimed by the single
+WhatsApp worker. It is used only to resolve a multi-match when exactly one
+fresh candidate remains; it never suppresses a sole claimed match, which must
+remain available for duplicate-transaction classification.
+
 stripe_match_status
 MATCHED/NO_MATCH/AMBIGUOUS/ERROR.
 

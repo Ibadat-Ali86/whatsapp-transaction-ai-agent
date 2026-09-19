@@ -593,6 +593,63 @@ async def test_ambiguous_exact_matches_fail_closed():
 
 
 @pytest.mark.asyncio
+async def test_one_unclaimed_charge_resolves_multiple_matches_without_guessing():
+    def responses(request):
+        if request.url.path == "/v1/customers":
+            return httpx.Response(200, json={"data": [{"id": "cus_customer", "email": "customer@example.com"}]})
+        assert request.url.path == "/v1/charges"
+        return httpx.Response(200, json={
+            "data": [
+                charge("ch_already_claimed"),
+                charge("ch_fresh"),
+            ],
+            "has_more": False,
+        })
+
+    result, _ = await verify_with_responses(
+        responses,
+        evidence_value=evidence(excluded_stripe_charge_ids=("ch_already_claimed",)),
+    )
+
+    assert result.verdict == "VALID"
+    assert result.reason_code == "EXACT_SINGLE_MATCH"
+    assert result.stripe_charge_id == "ch_fresh"
+
+
+@pytest.mark.asyncio
+async def test_bounded_broad_amount_search_recovers_charge_after_narrow_search_empty():
+    search_calls = 0
+
+    def responses(request):
+        nonlocal search_calls
+        if request.url.path == "/v1/customers":
+            return httpx.Response(200, json={"data": [{"id": "cus_customer", "email": "customer@example.com"}]})
+        if request.url.path == "/v1/charges" and request.url.params.get("customer") == "cus_customer":
+            return httpx.Response(200, json={"data": [charge("ch_page_one")], "has_more": True})
+        if request.url.path == "/v1/charges" and "created[gte]" in request.url.params:
+            return httpx.Response(200, json={"data": [], "has_more": False})
+        if request.url.path == "/v1/charges/search":
+            search_calls += 1
+            if search_calls == 1:
+                return httpx.Response(200, json={"data": [], "has_more": False})
+            return httpx.Response(200, json={
+                "data": [charge("ch_recovered", customer=None, receipt_email="customer@example.com")],
+                "has_more": False,
+            })
+        raise AssertionError(f"unexpected Stripe request: {request.url}")
+
+    result, _ = await verify_with_responses(
+        responses,
+        max_pages=1,
+        evidence_value=evidence(),
+    )
+
+    assert result.verdict == "VALID"
+    assert result.stripe_charge_id == "ch_recovered"
+    assert search_calls == 2
+
+
+@pytest.mark.asyncio
 async def test_email_and_amount_use_receipt_minute_to_disambiguate_customer_charges():
     def responses(request):
         if request.url.path == "/v1/customers":

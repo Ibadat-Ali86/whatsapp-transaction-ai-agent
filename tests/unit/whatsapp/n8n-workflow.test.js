@@ -91,6 +91,7 @@ test('n8n v2 code nodes validate optional captions and prepare recoverable Strip
     received_at: '2026-09-16T18:00:00.000Z',
     stripe_timezone: 'America/Chicago',
     stripe_verification_enabled: true,
+    claimed_stripe_charge_ids: ['ch-already-claimed', 'invalid id'],
     image: { mime_type: 'image/png', base64: 'aGVsbG8=' },
   };
 
@@ -159,6 +160,7 @@ test('n8n v2 code nodes validate optional captions and prepare recoverable Strip
   assert.equal(ready.stripe_request.transaction_id, null);
   assert.equal(ready.stripe_request.description, null);
   assert.equal(ready.stripe_request.amount_cents, 2500);
+  assert.deepEqual(Array.from(ready.stripe_request.excluded_stripe_charge_ids), ['ch-already-claimed']);
 
   const lowConfidence = executeCodeNode(prepare, {
     confidence: 0.42,

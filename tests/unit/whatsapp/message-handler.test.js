@@ -416,6 +416,7 @@ test('marks an exact screenshot resend as a duplicate across groups', async () =
   assert.match(replies[1].text, /DUPLICATE_IMAGE_SHA256/);
   assert.match(replies[1].text, /the group "Primary Review Group"/);
   assert.match(replies[1].text, /Original Processing ID: wa-/);
+  assert.match(replies[2].text, /Original Screenshot Reference/);
 });
 
 test('marks a repeated Stripe charge as a transaction duplicate', async () => {
@@ -456,4 +457,5 @@ test('marks a repeated Stripe charge as a transaction duplicate', async () => {
   assert.match(replies[1].text, /Duplicate Screenshot/);
   assert.match(replies[1].text, /DUPLICATE_STRIPE_TRANSACTION/);
   assert.match(replies[1].text, /Primary Review Group/);
+  assert.match(replies[2].text, /Original Screenshot Reference/);
 });

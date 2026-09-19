@@ -19,7 +19,16 @@ class OcrServiceError extends Error {
  * @returns {Promise<any>} The OCR result
  */
 async function processImageOCR(params, retries = 2) {
-  const { imageBase64, mimeType, processingId, messageId, groupId, senderJid, captionEmail } = params;
+  const {
+    imageBase64,
+    mimeType,
+    processingId,
+    messageId,
+    groupId,
+    senderJid,
+    captionEmail,
+    excludedStripeChargeIds,
+  } = params;
   
   const startTime = Date.now();
   logger.info({ processingId, messageId, groupIdHash: hashGroupJid(groupId), senderJid: String(senderJid || '').substring(0, 10) + '...' }, 'Sending request to OCR service');
@@ -33,6 +42,9 @@ async function processImageOCR(params, retries = 2) {
       group_id: groupId,
       sender_jid: senderJid,
       caption_email: captionEmail || null,
+      excluded_stripe_charge_ids: Array.isArray(excludedStripeChargeIds)
+        ? excludedStripeChargeIds
+        : [],
     }, {
       timeout: config.OCR_TIMEOUT_MS
     });

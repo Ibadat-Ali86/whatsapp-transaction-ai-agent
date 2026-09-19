@@ -91,6 +91,7 @@ class StripeVerificationRequest(BaseModel):
     payment_hour: Optional[int] = Field(default=None, ge=0, le=23)
     payment_month: Optional[int] = Field(default=None, ge=1, le=12)
     payment_day: Optional[int] = Field(default=None, ge=1, le=31)
+    excluded_stripe_charge_ids: list[str] = Field(default_factory=list, max_length=2048)
     currency: str = Field(default="usd", min_length=3, max_length=3)
     payment_method_type: str = Field(default="cashapp", min_length=1, max_length=32)
 
@@ -131,6 +132,21 @@ class StripeVerificationRequest(BaseModel):
         if value is None or not value.strip():
             return None
         return normalize_description(value)
+
+    @field_validator("excluded_stripe_charge_ids")
+    @classmethod
+    def normalize_excluded_stripe_charge_ids(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for charge_id in value:
+            if not isinstance(charge_id, str) or not charge_id.strip():
+                continue
+            try:
+                normalized_id = normalize_transaction_id(charge_id)
+            except ValueError:
+                continue
+            if normalized_id not in normalized:
+                normalized.append(normalized_id)
+        return normalized
 
     @field_validator("currency")
     @classmethod
@@ -284,6 +300,7 @@ async def verify_stripe(
         payment_hour=request.payment_hour,
         payment_month=request.payment_month,
         payment_day=request.payment_day,
+        excluded_stripe_charge_ids=tuple(request.excluded_stripe_charge_ids),
         currency=request.currency,
         payment_method_type=request.payment_method_type,
     )

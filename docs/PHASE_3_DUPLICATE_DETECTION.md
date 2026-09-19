@@ -12,14 +12,18 @@ new message
   -> OCR + Stripe verification
   -> same uniquely matched Stripe charge ID?
        -> DUPLICATE transaction
-  -> same pHash + caption email + OCR amount?
+  -> same pHash + same canonical Stripe charge ID?
        -> DUPLICATE recompressed/resized image
   -> otherwise
        -> ORIGINAL / VALID when Stripe is VALID
 ```
 
 `VALID` is never inferred from an image hash. Stripe must return one eligible
-succeeded charge. `DUPLICATE` is a non-approving verdict and includes the first
+succeeded charge. A pHash near-match is not sufficient by itself: email,
+amount, and receipt time are not unique when a customer makes multiple
+payments. The near-match path requires the same canonical Stripe charge ID on
+both records; otherwise the new screenshot continues through independent
+verification. `DUPLICATE` is a non-approving verdict and includes the first
 processing ID for audit correlation.
 
 The WhatsApp adapter reacts with `✅` only for a clear valid Stripe match and
@@ -30,7 +34,9 @@ It sends text only for duplicates and corrected-identity valid results,
 including whether
 the original was found in the same group or a named other allowlisted group
 when WhatsApp metadata is available, plus the original processing ID and
-detection proof.
+detection proof. When the original message key is available, a duplicate also
+gets a quoted reference on the original message; the original verdict is
+preserved in that annotation.
 
 Deleting the original WhatsApp message does not release its claim. This is
 intentional: deletion is not evidence that a payment should be reprocessed.
@@ -55,7 +61,8 @@ transactional store with a unique constraint on SHA-256 and Stripe charge ID.
 
 - exact SHA-256 resend across two groups;
 - persisted exact hash after recreating the store;
-- pHash near-match with matching caption email and amount;
+- pHash near-match with the same canonical Stripe charge ID;
+- same-looking receipts with different Stripe charge IDs remain independent;
 - repeated Stripe charge with different image bytes;
 - unrelated images do not become duplicates;
 - duplicate and unclear replies use non-approving verdicts.

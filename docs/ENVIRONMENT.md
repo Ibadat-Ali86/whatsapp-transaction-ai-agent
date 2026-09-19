@@ -132,17 +132,22 @@ The WhatsApp adapter persists duplicate metadata in
 the screenshot itself. `DUPLICATE_RETENTION_DAYS` controls metadata retention
 and defaults to 90 days. Exact resends are detected by SHA-256 across all
 allowlisted groups and bot restarts. Recompressed/resized copies are compared
-with pHash only when the caption identity and OCR amount also agree. A
-uniquely matched Stripe charge ID is independently claimed so the same
-payment is marked duplicate even when the image changes.
+with pHash only after both receipts resolve to the same canonical Stripe
+charge ID. Email, amount, and displayed time alone are not duplicate proof
+because one customer can make multiple same-amount payments in the same
+minute. A uniquely matched Stripe charge ID is independently claimed so the
+same payment is marked duplicate even when the image changes.
 
 Duplicate records retain the first-seen group-name snapshot when WhatsApp
 metadata is available. Duplicate replies include the original processing ID,
 the same-group or named-origin-group scope, and the detection proof: exact
 image hash, visual pHash match, or repeated Stripe charge. If metadata lookup
 fails, the reply safely falls back to a generic group/workspace description.
-A WhatsApp delete event never releases a claim; deletion is not proof that a
-payment may be safely reprocessed.
+A duplicate image or repeated Stripe charge also gets a quoted reference to
+the original WhatsApp message when its message key is still addressable; this
+annotation preserves the original result and does not silently re-approve or
+reclassify it. A WhatsApp delete event never releases a claim; deletion is not
+proof that a payment may be safely reprocessed.
 
 The file store is safe for one bot process handling many groups. If production
 uses multiple bot processes or hosts, replace it with a shared transactional

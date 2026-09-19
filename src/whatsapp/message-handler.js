@@ -119,6 +119,28 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
     await currentSock.sendMessage(groupId, { react: { text, key: message.key } });
   };
 
+  const notifyOriginalDuplicate = async (record, duplicateProcessingId) => {
+    const originalKey = record?.message_key;
+    const originalGroupId = originalKey?.remoteJid;
+    if (!originalGroupId || !originalKey?.id) return;
+    const originalVerdict = record.verification_verdict || 'UNAVAILABLE';
+    const marker = originalVerdict === 'VALID' ? '✅' : originalVerdict === 'UNCLEAR' ? '⚠️' : '❌';
+    const originalStatus = originalVerdict === 'UNAVAILABLE'
+      ? 'Original verification status was not recorded.'
+      : `Original verification status: ${originalVerdict}${record.verification_reason ? ` (${record.verification_reason})` : ''}.`;
+    const text = `${marker} *Original Screenshot Reference*\n\nThis message is the original screenshot record referenced by duplicate processing ID ${duplicateProcessingId}.\n${originalStatus}`;
+    try {
+      const currentSock = getSock();
+      if (!currentSock) return;
+      if (config.BOT_REPLY_ENABLED) {
+        await currentSock.sendMessage(originalGroupId, { text }, { quoted: { key: originalKey } });
+      }
+      await sendReaction(originalGroupId, { key: originalKey }, marker);
+    } catch (error) {
+      logger.warn({ duplicateProcessingId, err: error }, 'Unable to annotate original screenshot for duplicate');
+    }
+  };
+
   const resolveGroupName = dependencies.getGroupName || (async groupId => {
     if (!groupId) return null;
     if (groupNameCache.has(groupId)) return groupNameCache.get(groupId);
@@ -161,6 +183,7 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
         processingId: job.processing_id,
         groupIdHash: hashGroupJid(groupId),
         groupName: job.group_name,
+        messageKey: message.key,
         captionEmail: job.caption_email,
       });
       if (imageClaim.duplicate) {
@@ -184,11 +207,13 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
             }),
           }, { quoted: message });
         }
+        await notifyOriginalDuplicate(imageClaim.record, job.processing_id);
         logger.info({ processingId: job.processing_id, groupIdHash: hashGroupJid(groupId), matchType: imageClaim.matchType }, 'Duplicate image detected');
         return { status: 'COMPLETED', verdict: 'DUPLICATE', processing_id: job.processing_id };
       }
 
       const imageBase64 = imageBytes.toString('base64');
+      const claimedStripeChargeIds = duplicateStore.getClaimedTransactionIds();
       const eventPayload = {
         processing_id: job.processing_id,
         source: 'whatsapp',
@@ -200,6 +225,7 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
         caption_email: job.caption_email,
         stripe_verification_enabled: config.STRIPE_VERIFICATION_ENABLED === true,
         stripe_timezone: config.STRIPE_TIMEZONE,
+        claimed_stripe_charge_ids: claimedStripeChargeIds,
         image: { mime_type: downloadedMime, base64: imageBase64 },
       };
 
@@ -213,17 +239,30 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
           groupId,
           senderJid: job.sender_jid,
           captionEmail: job.caption_email,
+          excludedStripeChargeIds: claimedStripeChargeIds,
         });
 
       const fields = ocrResult?.fields || {};
       const imageEvidence = duplicateStore.registerImageEvidence({
         sha256: imageHash,
         phash: ocrResult?.image_phash,
-        captionEmail: job.caption_email,
+        captionEmail: ocrResult?.verification?.matched_transaction?.customer_email || fields.email || job.caption_email,
         amountCents: fields.amount_cents,
+        transactionId: fields.transaction_id,
+        paymentDate: fields.payment_date,
+        paymentMonth: fields.payment_month,
+        paymentDay: fields.payment_day,
+        paymentHour: fields.payment_hour,
+        minutes: fields.minutes != null && Number.isInteger(Number(fields.minutes))
+          ? Number(fields.minutes)
+          : null,
+        stripeChargeId: ocrResult?.verification?.stripe_charge_id,
+        verificationVerdict: ocrResult?.verification?.verdict,
+        verificationReason: ocrResult?.verification?.reason_code,
         processingId: job.processing_id,
       });
       let finalResult = ocrResult;
+      let duplicateRecord = null;
       if (imageEvidence.duplicate) {
         finalResult = {
           ...ocrResult,
@@ -237,11 +276,13 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
             duplicate_group_name: imageEvidence.record.group_name,
           },
         };
+        duplicateRecord = imageEvidence.record;
       } else if (ocrResult?.verification?.verdict === 'VALID' && ocrResult.verification.stripe_charge_id) {
         const transactionClaim = duplicateStore.claimTransaction(`stripe:${ocrResult.verification.stripe_charge_id}`, {
           processingId: job.processing_id,
           groupIdHash: hashGroupJid(groupId),
           groupName: job.group_name,
+          messageKey: message.key,
         });
         if (transactionClaim.duplicate) {
           finalResult = {
@@ -256,6 +297,7 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
               duplicate_group_name: transactionClaim.record.group_name,
             },
           };
+          duplicateRecord = transactionClaim.record;
         }
       }
 
@@ -268,6 +310,7 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
             }),
           }, { quoted: message });
         }
+        await notifyOriginalDuplicate(duplicateRecord, job.processing_id);
       } else if (finalResult?.verification?.verdict === 'VALID') {
         const verification = finalResult.verification || {};
         const canonicalEmail = verification.matched_transaction?.customer_email;

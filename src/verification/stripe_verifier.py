@@ -64,6 +64,11 @@ class PaymentEvidence:
     payment_hour: Optional[int] = None
     payment_month: Optional[int] = None
     payment_day: Optional[int] = None
+    # Stripe charge IDs already claimed by the single WhatsApp worker. They
+    # are used only to resolve a multi-match when exactly one fresh charge
+    # remains; a sole claimed match is intentionally preserved so the Node
+    # layer can report it as a duplicate transaction.
+    excluded_stripe_charge_ids: tuple[str, ...] = ()
     currency: str = "usd"
     payment_method_type: str = "cashapp"
 
@@ -794,12 +799,23 @@ class StripeVerifier:
             normalized_description = None
             if evidence.description is not None and evidence.description.strip():
                 normalized_description = normalize_description(evidence.description)
+            normalized_excluded_charge_ids: list[str] = []
+            for charge_id in evidence.excluded_stripe_charge_ids:
+                if charge_id is None or not str(charge_id).strip():
+                    continue
+                try:
+                    normalized_charge_id = normalize_transaction_id(str(charge_id))
+                except ValueError:
+                    continue
+                if normalized_charge_id not in normalized_excluded_charge_ids:
+                    normalized_excluded_charge_ids.append(normalized_charge_id)
             evidence = replace(
                 evidence,
                 email=normalized_email,
                 email_candidates=tuple(normalized_email_candidates),
                 transaction_id=normalized_transaction_id,
                 description=normalized_description,
+                excluded_stripe_charge_ids=tuple(normalized_excluded_charge_ids),
                 currency=evidence.currency.casefold(),
                 payment_method_type=evidence.payment_method_type.casefold(),
             )
@@ -956,6 +972,24 @@ class StripeVerifier:
                     )
                 ]
 
+            excluded_charge_ids = set(evidence.excluded_stripe_charge_ids)
+
+            def prefer_one_fresh_candidate(candidate_matches: list[dict[str, Any]]) -> list[dict[str, Any]]:
+                """Resolve only the safe case: multiple matches, one unused charge.
+
+                A previously claimed charge must not hide a new eligible charge,
+                but the verifier must still return a sole claimed match so the
+                WhatsApp layer can classify the submission as a duplicate.
+                Never choose arbitrarily when two or more fresh charges remain.
+                """
+                if len(candidate_matches) <= 1 or not excluded_charge_ids:
+                    return candidate_matches
+                fresh_matches = [
+                    charge for charge in candidate_matches
+                    if charge.get("id") not in excluded_charge_ids
+                ]
+                return fresh_matches if len(fresh_matches) == 1 else candidate_matches
+
             matches = matches_for(
                 charges,
                 # Apply every trustworthy receipt constraint before deciding
@@ -970,6 +1004,7 @@ class StripeVerifier:
                 match_hour=bool(self.screenshot_timezone),
                 match_minute=False,
             )
+            matches = prefer_one_fresh_candidate(matches)
 
             # A receipt clock can differ from the Stripe account clock even
             # when the account dashboard is configured for US Central. If the
@@ -1012,6 +1047,7 @@ class StripeVerifier:
                                 match_hour=False,
                                 match_minute=False,
                             )
+                        matches = prefer_one_fresh_candidate(matches)
 
             # Email identity plus the Stripe payment attributes is a safe
             # fallback when a receipt minute was OCR'd incorrectly or belongs
@@ -1028,6 +1064,7 @@ class StripeVerifier:
                     match_hour=False,
                     match_minute=evidence.minutes is not None,
                 )
+                matches = prefer_one_fresh_candidate(matches)
             if not matches and identity_emails:
                 matches = matches_for(
                     charges,
@@ -1035,6 +1072,7 @@ class StripeVerifier:
                     match_hour=False,
                     match_minute=False,
                 )
+                matches = prefer_one_fresh_candidate(matches)
 
             # A charge can be discoverable by receipt_email without being
             # attached to the Customer returned by the email lookup. Retry
@@ -1053,6 +1091,7 @@ class StripeVerifier:
                     match_hour=False,
                     match_minute=True,
                 )
+                matches = prefer_one_fresh_candidate(matches)
                 if not matches and identity_emails:
                     matches = matches_for(
                         charges,
@@ -1060,6 +1099,62 @@ class StripeVerifier:
                         match_hour=False,
                         match_minute=False,
                     )
+                    matches = prefer_one_fresh_candidate(matches)
+
+            # A narrow day/time Search query can legitimately return an empty
+            # set when the receipt clock and Stripe's account clock cross a
+            # timezone boundary, when the dashboard record is newer than the
+            # Search index, or when the caption date was OCR'd from a stale
+            # receipt. Retry once with a bounded amount/lookback query and
+            # retain all local evidence constraints before approving anything.
+            if (
+                not matches
+                and evidence.amount_cents is not None
+                and (evidence.payment_date is not None or evidence.minutes is not None or evidence.transaction_id)
+            ):
+                broad_lower_timestamp = int(datetime.now(timezone.utc).timestamp()) - int(
+                    timedelta(days=self.lookback_days).total_seconds()
+                )
+                broad_query = self._charge_search_query(
+                    evidence,
+                    lower_timestamp=broad_lower_timestamp,
+                )
+                broad_charges: list[dict[str, Any]] = []
+                if broad_query is not None:
+                    try:
+                        broad_charges = await self._charges_for_search(client, broad_query)
+                    except StripeVerificationError as exc:
+                        if exc.reason_code == "STRIPE_API_ERROR":
+                            broad_charges = await self._charges_for_lookback(client)
+                        elif exc.reason_code != "STRIPE_PAGINATION_LIMIT":
+                            raise
+                if broad_charges:
+                    merged_charges = {charge.get("id"): charge for charge in charges if charge.get("id")}
+                    merged_charges.update({charge.get("id"): charge for charge in broad_charges if charge.get("id")})
+                    charges = list(merged_charges.values())
+                    matches = matches_for(
+                        charges,
+                        include_time_constraints=True,
+                        match_hour=bool(self.screenshot_timezone),
+                        match_minute=False,
+                    )
+                    matches = prefer_one_fresh_candidate(matches)
+                    if not matches and identity_emails:
+                        matches = matches_for(
+                            charges,
+                            include_time_constraints=False,
+                            match_hour=False,
+                            match_minute=evidence.minutes is not None,
+                        )
+                        matches = prefer_one_fresh_candidate(matches)
+                    if not matches and identity_emails:
+                        matches = matches_for(
+                            charges,
+                            include_time_constraints=False,
+                            match_hour=False,
+                            match_minute=False,
+                        )
+                        matches = prefer_one_fresh_candidate(matches)
 
             # A screenshot/provider transaction ID is a high-strength lookup
             # hint. Use it after the normal customer search and its bounded
@@ -1151,6 +1246,7 @@ class StripeVerifier:
                         match_hour=bool(self.screenshot_timezone),
                     )
                 ]
+                recovery_matches = prefer_one_fresh_candidate(recovery_matches)
                 if len(recovery_matches) == 1:
                     matches = recovery_matches
                     recovered_identity = True

@@ -43,6 +43,34 @@ Requires release checklist and rollback plan.
 
 AI agents must not perform C4/C5 actions without explicit authorization.
 
+## CC-0010
+
+Date: 2026-09-19
+Agent: Codex
+Requested by: User
+Reason: Reduce false review and duplicate classifications in multi-group
+WhatsApp payment processing.
+Files changed: Stripe verifier, OCR request contract, Baileys duplicate store
+and message handler, n8n workflow exports, regression tests, and operational
+documentation.
+Behavior changed: bounded broad Stripe recovery is attempted after a narrow
+search misses; one fresh candidate can disambiguate already-claimed matches;
+pHash requires the same canonical Stripe charge ID; duplicate replies can
+annotate the original WhatsApp message without changing its stored verdict.
+Security impact: Stripe remains read-only; claimed IDs are internal
+identifiers only; no credentials or raw images are added to the store or
+workflow exports.
+Data impact: existing duplicate records remain readable; new records may
+contain sanitized message-key metadata and verification evidence fields.
+Tests: full Python suite (127 tests) and WhatsApp/n8n Node suite (53 tests)
+passed, plus syntax, workflow-JSON, and diff checks.
+Result: Implemented locally; production deployment and live Stripe/WhatsApp
+acceptance test are not performed by this change.
+Rollback: revert the working-tree changes and redeploy the prior verified
+application/workflow exports; do not delete the duplicate ledger.
+Documentation updated: ENVIRONMENT.md, PHASE_3_DUPLICATE_DETECTION.md,
+N8N_WORKFLOW_SPEC.md, DATA_DICTIONARY.md.
+
 ## Rollback
 
 Before risky changes:

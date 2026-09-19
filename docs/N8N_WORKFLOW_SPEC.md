@@ -57,6 +57,14 @@ Phase 2 Step 1 contract:
   collisions remain UNCLEAR; if OCR produces an identifier that does not
   resolve, the verifier falls back to the normal safe email/evidence path
   rather than treating the OCR hint alone as a rejection.
+  The Baileys event also carries a bounded list of previously claimed Stripe
+  charge IDs. When several otherwise eligible Stripe charges match, the
+  verifier may select a charge only when exactly one candidate is still fresh;
+  if two or more fresh candidates remain, it stays UNCLEAR. A sole previously
+  claimed candidate is preserved so the adapter can classify the submission as
+  a duplicate transaction rather than incorrectly approving it as new.
+  The direct OCR-service path receives the same list when n8n is disabled, so
+  multi-match behavior is identical in both supported deployment modes.
   Stripe `description` is fetched and returned with the unique matched
   transaction; it is not expected in the current receipt screenshots and is
   never fabricated by the AI extractor. It can disambiguate only when the
