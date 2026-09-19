@@ -128,12 +128,22 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
     const originalStatus = originalVerdict === 'UNAVAILABLE'
       ? 'Original verification status was not recorded.'
       : `Original verification status: ${originalVerdict}${record.verification_reason ? ` (${record.verification_reason})` : ''}.`;
-    const text = `${marker} *Original Screenshot Reference*\n\nThis message is the original screenshot record referenced by duplicate processing ID ${duplicateProcessingId}.\n${originalStatus}`;
+    const chargeProof = record.stripe_charge_id
+      ? `\nCanonical Stripe charge: ${record.stripe_charge_id}.`
+      : '';
+    const text = `${marker} *Original Screenshot Reference*\n\nThis message is the original screenshot record referenced by duplicate processing ID ${duplicateProcessingId}.\n${originalStatus}${chargeProof}`;
     try {
       const currentSock = getSock();
       if (!currentSock) return;
+      const quoted = record.quoted_message || { key: originalKey };
       if (config.BOT_REPLY_ENABLED) {
-        await currentSock.sendMessage(originalGroupId, { text }, { quoted: { key: originalKey } });
+        try {
+          await currentSock.sendMessage(originalGroupId, { text }, { quoted });
+        } catch (error) {
+          // A restarted Baileys session may reject a stale quoted envelope.
+          // Still deliver the provenance annotation to the original group.
+          await currentSock.sendMessage(originalGroupId, { text });
+        }
       }
       await sendReaction(originalGroupId, { key: originalKey }, marker);
     } catch (error) {
@@ -184,33 +194,12 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
         groupIdHash: hashGroupJid(groupId),
         groupName: job.group_name,
         messageKey: message.key,
+        message,
         captionEmail: job.caption_email,
       });
-      if (imageClaim.duplicate) {
-        const duplicateResult = {
-          provider: 'duplicate-detector',
-          confidence: 1,
-          fields: { email: job.caption_email },
-          verification: {
-            status: 'DUPLICATE',
-            verdict: 'DUPLICATE',
-            reason_code: `DUPLICATE_IMAGE_${imageClaim.matchType}`,
-            duplicate_of_processing_id: imageClaim.record.processing_id,
-            duplicate_scope: duplicateScope(imageClaim.record, groupId),
-          },
-        };
-        if (config.BOT_REPLY_ENABLED) {
-          await currentSock.sendMessage(groupId, {
-            text: formatDuplicateReply(duplicateResult, job.processing_id, {
-              groupScope: duplicateScope(imageClaim.record, groupId),
-              originalGroupName: imageClaim.record.group_name,
-            }),
-          }, { quoted: message });
-        }
-        await notifyOriginalDuplicate(imageClaim.record, job.processing_id);
-        logger.info({ processingId: job.processing_id, groupIdHash: hashGroupJid(groupId), matchType: imageClaim.matchType }, 'Duplicate image detected');
-        return { status: 'COMPLETED', verdict: 'DUPLICATE', processing_id: job.processing_id };
-      }
+      // An exact image hash is only a duplicate candidate. The same image
+      // asset can be submitted for a different Stripe payment, so Stripe
+      // must resolve the canonical charge before this becomes a duplicate.
 
       const imageBase64 = imageBytes.toString('base64');
       const claimedStripeChargeIds = duplicateStore.getClaimedTransactionIds();
@@ -260,6 +249,10 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
         verificationVerdict: ocrResult?.verification?.verdict,
         verificationReason: ocrResult?.verification?.reason_code,
         processingId: job.processing_id,
+        groupIdHash: hashGroupJid(groupId),
+        groupName: job.group_name,
+        messageKey: message.key,
+        message,
       });
       let finalResult = ocrResult;
       let duplicateRecord = null;
@@ -283,6 +276,7 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
           groupIdHash: hashGroupJid(groupId),
           groupName: job.group_name,
           messageKey: message.key,
+          message,
         });
         if (transactionClaim.duplicate) {
           finalResult = {
@@ -291,7 +285,7 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
               ...ocrResult.verification,
               status: 'DUPLICATE',
               verdict: 'DUPLICATE',
-              reason_code: 'DUPLICATE_STRIPE_TRANSACTION',
+              reason_code: imageClaim.duplicate ? `DUPLICATE_IMAGE_${imageClaim.matchType}` : 'DUPLICATE_STRIPE_TRANSACTION',
               duplicate_of_processing_id: transactionClaim.record.processing_id,
               duplicate_scope: duplicateScope(transactionClaim.record, groupId),
               duplicate_group_name: transactionClaim.record.group_name,
@@ -299,6 +293,21 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
           };
           duplicateRecord = transactionClaim.record;
         }
+      }
+
+      // Seeing the same image bytes is not enough to call a payment duplicate.
+      // Expose the candidate in a review response when Stripe did not prove
+      // that the canonical charge was reused.
+      if (imageClaim.duplicate && finalResult?.verification?.verdict !== 'DUPLICATE') {
+        finalResult = {
+          ...finalResult,
+          verification: {
+            ...(finalResult.verification || {}),
+            same_image_candidate: true,
+            same_image_original_processing_id: imageClaim.record.processing_id,
+            same_image_original_group_name: imageClaim.record.group_name,
+          },
+        };
       }
 
       if (finalResult?.verification?.verdict === 'DUPLICATE') {

@@ -593,6 +593,30 @@ async def test_ambiguous_exact_matches_fail_closed():
 
 
 @pytest.mark.asyncio
+async def test_customer_name_disambiguates_same_email_amount_and_time_safely():
+    def responses(request):
+        if request.url.path == "/v1/customers":
+            return httpx.Response(200, json={"data": [{"id": "cus_customer", "email": "customer@example.com"}]})
+        assert request.url.path == "/v1/charges"
+        return httpx.Response(200, json={
+            "data": [
+                charge("ch_jenny", billing_details={"name": "Jenny Waters"}),
+                charge("ch_other", billing_details={"name": "Other Customer"}),
+            ],
+            "has_more": False,
+        })
+
+    result, _ = await verify_with_responses(
+        responses,
+        evidence_value=evidence(customer_name="jenny waters"),
+    )
+
+    assert result.verdict == "VALID"
+    assert result.stripe_charge_id == "ch_jenny"
+    assert result.matched_transaction["customer_name"] == "Jenny Waters"
+
+
+@pytest.mark.asyncio
 async def test_one_unclaimed_charge_resolves_multiple_matches_without_guessing():
     def responses(request):
         if request.url.path == "/v1/customers":

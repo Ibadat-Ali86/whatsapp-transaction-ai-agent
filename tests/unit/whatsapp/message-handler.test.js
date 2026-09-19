@@ -385,7 +385,13 @@ test('routes a captioned image through n8n when enabled', async () => {
 
 test('marks an exact screenshot resend as a duplicate across groups', async () => {
   const replies = [];
-  const sock = { sendMessage: async (_jid, content) => replies.push(content) };
+  const sent = [];
+  const sock = {
+    sendMessage: async (jid, content, options) => {
+      sent.push({ jid, content, options });
+      replies.push(content);
+    },
+  };
   const store = duplicateStore();
   const handler = createMessageHandler(sock, {
     ALLOWED_GROUP_JIDS: [
@@ -416,7 +422,48 @@ test('marks an exact screenshot resend as a duplicate across groups', async () =
   assert.match(replies[1].text, /DUPLICATE_IMAGE_SHA256/);
   assert.match(replies[1].text, /the group "Primary Review Group"/);
   assert.match(replies[1].text, /Original Processing ID: wa-/);
+  assert.match(replies[1].text, /Proof: both submissions resolved to Stripe charge ch-image-test/);
   assert.match(replies[2].text, /Original Screenshot Reference/);
+  assert.ok(sent.some(entry => (
+    entry.jid === '1234567890-1234567890@g.us'
+    && /Original Screenshot Reference/.test(entry.content?.text || '')
+    && entry.options?.quoted?.message?.imageMessage
+  )));
+});
+
+test('does not call an identical image a duplicate when Stripe resolves a new charge', async () => {
+  const reactions = [];
+  const sock = { sendMessage: async (_jid, content) => reactions.push(content) };
+  const store = duplicateStore();
+  let verificationCalls = 0;
+  const handler = createMessageHandler(sock, {
+    ALLOWED_GROUP_JIDS: ['1234567890-1234567890@g.us'],
+    BOT_REPLY_ENABLED: false,
+    BOT_REACTIONS_ENABLED: true,
+    REQUIRE_EMAIL_CAPTION: true,
+    N8N_ENABLED: true,
+    STRIPE_VERIFICATION_ENABLED: true,
+  }, logger, {
+    duplicateStore: store,
+    downloadImage: async () => ({ imageBytes: Buffer.from('same-image-different-payment'), mimeType: 'image/png', tempPath: null }),
+    processImageViaN8n: async payload => ({
+      fields: { email: payload.caption_email, amount_cents: 2000 },
+      confidence: 1,
+      provider: 'tesseract',
+      verification: {
+        status: 'MATCHED',
+        verdict: 'VALID',
+        reason_code: 'EXACT_SINGLE_MATCH',
+        stripe_charge_id: `ch-new-payment-${++verificationCalls}`,
+      },
+    }),
+  });
+
+  await handler({ messages: [captionedImageMessage('1234567890-1234567890@g.us', 'same-image-first')] });
+  await handler({ messages: [captionedImageMessage('1234567890-1234567890@g.us', 'same-image-second')] });
+
+  assert.equal(reactions.length, 2);
+  assert.deepEqual(reactions.map(event => event.react?.text), ['✅', '✅']);
 });
 
 test('marks a repeated Stripe charge as a transaction duplicate', async () => {

@@ -27,6 +27,36 @@ function messageKeySnapshot(messageKey) {
   return snapshot.remoteJid && snapshot.id ? snapshot : null;
 }
 
+function quotedMessageSnapshot(message) {
+  const key = messageKeySnapshot(message?.key);
+  const content = message?.message;
+  if (!key || !content || typeof content !== 'object') return null;
+
+  // Preserve enough of the original Baileys envelope to quote it later,
+  // while excluding thumbnails and arbitrary binary payloads.
+  const snapshot = {};
+  for (const field of ['imageMessage', 'documentMessage', 'extendedTextMessage', 'conversation']) {
+    if (content[field] === undefined) continue;
+    try {
+      const value = JSON.parse(JSON.stringify(content[field], (name, entry) => {
+        if (['jpegThumbnail', 'thumbnail', 'thumbnailDirectPath'].includes(name)) return undefined;
+        if (typeof entry === 'string' && entry.length > 4096) return entry.slice(0, 4096);
+        return entry;
+      }));
+      snapshot[field] = value;
+    } catch (_error) {
+      // The group annotation can still be sent without a quote.
+    }
+  }
+  return Object.keys(snapshot).length ? { key, message: snapshot } : { key };
+}
+
+function imageOccurrences(record) {
+  if (!record || typeof record !== 'object') return [];
+  return [record, ...(Array.isArray(record.occurrences) ? record.occurrences : [])]
+    .filter(occurrence => occurrence && typeof occurrence === 'object');
+}
+
 function receiptFingerprint({
   captionEmail,
   amountCents,
@@ -118,7 +148,7 @@ function createDuplicateStore({
   load();
 
   return {
-    claimImage({ sha256, processingId, groupIdHash, groupName, messageKey, captionEmail, amountCents }) {
+    claimImage({ sha256, processingId, groupIdHash, groupName, messageKey, message, captionEmail, amountCents }) {
       if (!/^[0-9a-f]{64}$/i.test(sha256 || '')) throw new Error('Invalid image SHA-256');
       prune();
       const existing = state.images[sha256];
@@ -132,6 +162,7 @@ function createDuplicateStore({
         group_id_hash: groupIdHash,
         group_name: typeof groupName === 'string' ? groupName : null,
         message_key: messageKeySnapshot(messageKey),
+        quoted_message: quotedMessageSnapshot(message),
         first_seen_at: Date.now(),
         email_hash: captionEmail ? emailHash(captionEmail) : null,
         amount_cents: Number.isInteger(amountCents) ? amountCents : null,
@@ -158,49 +189,72 @@ function createDuplicateStore({
       verificationVerdict,
       verificationReason,
       processingId,
+      groupIdHash,
+      groupName,
+      messageKey,
+      message,
     }) {
       prune();
       const current = state.images[sha256];
+      let currentEvidence = null;
       if (current) {
-        current.phash = typeof phash === 'string' ? phash.toLowerCase() : null;
-        current.email_hash = captionEmail ? emailHash(captionEmail) : current.email_hash;
-        current.amount_cents = Number.isInteger(amountCents) ? amountCents : current.amount_cents;
-        current.evidence_fingerprint = receiptFingerprint({
-          captionEmail,
-          amountCents,
-          transactionId,
-          paymentDate,
-          paymentMonth,
-          paymentDay,
-          paymentHour,
-          minutes,
-        });
-        current.stripe_charge_id = typeof stripeChargeId === 'string' ? stripeChargeId : null;
-        current.verification_verdict = typeof verificationVerdict === 'string' ? verificationVerdict : null;
-        current.verification_reason = typeof verificationReason === 'string' ? verificationReason : null;
+        const evidence = {
+          phash: typeof phash === 'string' ? phash.toLowerCase() : null,
+          email_hash: captionEmail ? emailHash(captionEmail) : null,
+          amount_cents: Number.isInteger(amountCents) ? amountCents : null,
+          evidence_fingerprint: receiptFingerprint({
+            captionEmail,
+            amountCents,
+            transactionId,
+            paymentDate,
+            paymentMonth,
+            paymentDay,
+            paymentHour,
+            minutes,
+          }),
+          stripe_charge_id: typeof stripeChargeId === 'string' ? stripeChargeId : null,
+          verification_verdict: typeof verificationVerdict === 'string' ? verificationVerdict : null,
+          verification_reason: typeof verificationReason === 'string' ? verificationReason : null,
+          processing_id: processingId,
+          group_id_hash: typeof groupIdHash === 'string' ? groupIdHash : current.group_id_hash || null,
+          group_name: typeof groupName === 'string' ? groupName : current.group_name || null,
+          message_key: messageKeySnapshot(messageKey) || current.message_key || null,
+          quoted_message: quotedMessageSnapshot(message) || current.quoted_message || null,
+          first_seen_at: Date.now(),
+        };
+        if (current.processing_id === processingId) {
+          Object.assign(current, evidence);
+          currentEvidence = current;
+        } else {
+          current.occurrences = Array.isArray(current.occurrences) ? current.occurrences : [];
+          const existingOccurrence = current.occurrences.find(item => item.processing_id === processingId);
+          if (existingOccurrence) Object.assign(existingOccurrence, evidence);
+          else current.occurrences.push(evidence);
+          currentEvidence = existingOccurrence || current.occurrences[current.occurrences.length - 1];
+        }
         current.status = 'COMPLETED';
       }
 
-      const currentFingerprint = current?.evidence_fingerprint;
+      const currentFingerprint = currentEvidence?.evidence_fingerprint;
       if (typeof phash === 'string' && currentFingerprint && typeof stripeChargeId === 'string' && stripeChargeId) {
         for (const [otherSha256, record] of Object.entries(state.images)) {
           if (otherSha256 === sha256 || record.status !== 'COMPLETED') continue;
-          if (record.evidence_fingerprint !== currentFingerprint) continue;
-          // Date/time, amount, and email are not unique payment identity:
-          // separate same-minute payments can share all three. A visual
-          // near-match is therefore usable only when both receipts resolve
-          // to the same canonical Stripe charge. Exact SHA-256 remains the
-          // independent duplicate proof for byte-identical resends.
-          if (!record.stripe_charge_id || record.stripe_charge_id !== stripeChargeId) continue;
-          const distance = hammingDistance(phash, record.phash);
-          if (distance !== null && distance <= phashMaxDistance) {
-            persist();
-            return { duplicate: true, matchType: 'PHASH', record, distance };
+          for (const occurrence of imageOccurrences(record)) {
+            if (occurrence.verification_verdict && occurrence.verification_verdict !== 'VALID') continue;
+            if (occurrence.evidence_fingerprint !== currentFingerprint) continue;
+            // Visual similarity is only duplicate proof when both images
+            // resolve to the same canonical Stripe charge.
+            if (!occurrence.stripe_charge_id || occurrence.stripe_charge_id !== stripeChargeId) continue;
+            const distance = hammingDistance(phash, occurrence.phash);
+            if (distance !== null && distance <= phashMaxDistance) {
+              persist();
+              return { duplicate: true, matchType: 'PHASH', record: occurrence, distance };
+            }
           }
         }
       }
       persist();
-      return { duplicate: false, record: current || null };
+      return { duplicate: false, record: currentEvidence || current || null };
     },
 
     releaseImage(sha256) {
@@ -210,7 +264,7 @@ function createDuplicateStore({
       }
     },
 
-    claimTransaction(transactionKey, { processingId, groupIdHash, groupName, messageKey }) {
+    claimTransaction(transactionKey, { processingId, groupIdHash, groupName, messageKey, message }) {
       if (typeof transactionKey !== 'string' || transactionKey.length < 1) {
         throw new Error('Invalid transaction key');
       }
@@ -225,6 +279,7 @@ function createDuplicateStore({
         group_id_hash: groupIdHash,
         group_name: typeof groupName === 'string' ? groupName : null,
         message_key: messageKeySnapshot(messageKey),
+        quoted_message: quotedMessageSnapshot(message),
         first_seen_at: Date.now(),
       };
       state.transactions[transactionKey] = record;

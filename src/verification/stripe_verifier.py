@@ -58,6 +58,9 @@ class PaymentEvidence:
     # must not require it; a dashboard-only description cannot be inferred
     # from amount and email.
     description: Optional[str] = None
+    # Optional receipt customer name used only as a deterministic
+    # disambiguator when email/amount/time leave multiple Stripe charges.
+    customer_name: Optional[str] = None
     amount_cents: Optional[int] = None
     payment_date: Optional[date] = None
     minutes: Optional[int] = None
@@ -227,6 +230,13 @@ def normalize_description(value: str) -> str:
     if not normalized or len(normalized) > 1000:
         raise ValueError("invalid description")
     return normalized.casefold()
+
+
+def normalize_customer_name(value: str) -> str:
+    normalized = " ".join(value.strip().split()).casefold()
+    if not normalized or len(normalized) > 256:
+        raise ValueError("invalid customer name")
+    return normalized
 
 
 def _email_hash(email: Optional[str]) -> Optional[str]:
@@ -623,6 +633,21 @@ class StripeVerifier:
         return None
 
     @staticmethod
+    def _charge_customer_name(charge: dict[str, Any]) -> Optional[str]:
+        billing_details = charge.get("billing_details")
+        if isinstance(billing_details, dict) and isinstance(billing_details.get("name"), str):
+            value = " ".join(billing_details["name"].split()).casefold()
+            return value or None
+        return None
+
+    @classmethod
+    def _customer_name_matches(cls, charge: dict[str, Any], evidence: PaymentEvidence) -> bool:
+        if not evidence.customer_name:
+            return False
+        charge_name = cls._charge_customer_name(charge)
+        return bool(charge_name and charge_name == evidence.customer_name)
+
+    @staticmethod
     def _charge_transaction_ids(charge: dict[str, Any]) -> set[str]:
         """Return explicit provider/reference IDs exposed on a Stripe charge."""
         values: set[str] = set()
@@ -775,6 +800,7 @@ class StripeVerifier:
             (
                 evidence.amount_cents is not None,
                 evidence.description is not None,
+                evidence.customer_name is not None,
                 date_constraint,
                 evidence.minutes is not None,
                 bool(self.screenshot_timezone) and evidence.payment_hour is not None,
@@ -982,13 +1008,26 @@ class StripeVerifier:
                 WhatsApp layer can classify the submission as a duplicate.
                 Never choose arbitrarily when two or more fresh charges remain.
                 """
-                if len(candidate_matches) <= 1 or not excluded_charge_ids:
-                    return candidate_matches
-                fresh_matches = [
-                    charge for charge in candidate_matches
-                    if charge.get("id") not in excluded_charge_ids
-                ]
-                return fresh_matches if len(fresh_matches) == 1 else candidate_matches
+                selected = candidate_matches
+                if len(candidate_matches) > 1 and excluded_charge_ids:
+                    fresh_matches = [
+                        charge for charge in candidate_matches
+                        if charge.get("id") not in excluded_charge_ids
+                    ]
+                    selected = fresh_matches if len(fresh_matches) == 1 else candidate_matches
+
+                # A receipt customer name is independent of the caption email
+                # and amount. Use it only to select one exact candidate from an
+                # already eligible set; never use a fuzzy name match to approve
+                # a payment or to discard an otherwise eligible candidate.
+                if len(selected) > 1 and evidence.customer_name:
+                    named_matches = [
+                        charge for charge in selected
+                        if self._customer_name_matches(charge, evidence)
+                    ]
+                    if len(named_matches) == 1:
+                        return named_matches
+                return selected
 
             matches = matches_for(
                 charges,

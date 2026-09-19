@@ -50,6 +50,11 @@ test('n8n v2 workflow contains a gated Stripe branch without secret values', () 
   assert.equal(webhookNode.credentials.httpHeaderAuth.id, 'CONFIGURE_IN_N8N');
   assert.notEqual(stripeNode.credentials.httpHeaderAuth.id, webhookNode.credentials.httpHeaderAuth.id);
   assert.doesNotMatch(stripeNode.parameters.jsonBody, /image\.base64/);
+  for (const responseName of ['Respond Verified Result', 'Respond OCR Result', 'Respond Duplicate', 'Respond Invalid Event']) {
+    const responseNode = workflow.nodes.find(node => node.name === responseName);
+    assert.ok(responseNode);
+    assert.doesNotMatch(responseNode.parameters.responseBody, /JSON\.stringify/);
+  }
   assert.match(serialized, /stripe_verification_enabled/);
   assert.match(serialized, /STRIPE_LOOKUP_PENDING/);
   assert.match(serialized, /maxBase64Length/);
@@ -160,6 +165,7 @@ test('n8n v2 code nodes validate optional captions and prepare recoverable Strip
   assert.equal(ready.stripe_request.transaction_id, null);
   assert.equal(ready.stripe_request.description, null);
   assert.equal(ready.stripe_request.amount_cents, 2500);
+  assert.equal(ready.stripe_request.customer_name, null);
   assert.deepEqual(Array.from(ready.stripe_request.excluded_stripe_charge_ids), ['ch-already-claimed']);
 
   const lowConfidence = executeCodeNode(prepare, {

@@ -111,7 +111,10 @@ function formatVerificationFailureReply(ocrResult, processingId) {
   const conclusion = isUnclear
     ? 'This is not a fraud determination. No payment was approved because the available evidence did not identify exactly one Stripe record.'
     : 'No payment was approved. Please review the screenshot details and Stripe record.';
-  return `${heading}\n📋 Processing ID: ${processingId}\n\n${reasonText}\n🧾 Verification reason: ${reason}\n📊 Stripe candidates reviewed: ${candidateCount ?? 'not available'}\n\n${conclusion}`;
+  const sameImageNote = verification.same_image_candidate
+    ? `\n🖼️ Same image candidate only: ${verification.same_image_original_processing_id || 'previous processing'}${verification.same_image_original_group_name ? ` in ${verification.same_image_original_group_name}` : ''}. Stripe did not prove the same payment, so this was not labelled duplicate.`
+    : '';
+  return `${heading}\n📋 Processing ID: ${processingId}\n\n${reasonText}\n🧾 Verification reason: ${reason}\n📊 Stripe candidates reviewed: ${candidateCount ?? 'not available'}${sameImageNote}\n\n${conclusion}`;
 }
 
 /**
@@ -136,8 +139,12 @@ function formatDuplicateReply(ocrResult, processingId, { groupScope = null, orig
     : reason === 'DUPLICATE_IMAGE_PHASH'
       ? 'a visually equivalent copy of the screenshot was already processed'
       : 'the exact screenshot image was already processed';
+  const stripeCharge = verification.stripe_charge_id || verification.matched_transaction?.stripe_charge_id;
+  const proof = stripeCharge
+    ? `\n🔗 Proof: both submissions resolved to Stripe charge ${stripeCharge}.`
+    : '\n🔗 Proof: the duplicate decision requires the same canonical Stripe charge; image similarity alone is not sufficient.';
 
-  return `♻️ *Duplicate Screenshot*\n📋 Processing ID: ${processingId}\n\nThis screenshot was already processed in ${scope}; ${reasonText}.\n🧾 Detection reason: ${reason}\n🔁 Original Processing ID: ${originalId}\n\nNo second payment verification was recorded.`;
+  return `♻️ *Duplicate Screenshot*\n📋 Processing ID: ${processingId}\n\nThis screenshot was already processed in ${scope}; ${reasonText}.\n🧾 Detection reason: ${reason}\n🔁 Original Processing ID: ${originalId}${proof}\n\nThe original screenshot is annotated in its original group when WhatsApp permits cross-group quoting. No second payment verification was recorded.`;
 }
 
 /**
