@@ -108,7 +108,11 @@ claimed_stripe_charge_ids
 Bounded internal list of Stripe charge IDs already claimed by the single
 WhatsApp worker. It is used only to resolve a multi-match when exactly one
 fresh candidate remains; it never suppresses a sole claimed match, which must
-remain available for duplicate-transaction classification.
+remain available for duplicate-transaction classification. The list is built
+from both the transaction-claim ledger and persisted image evidence whose
+verification verdict is explicitly `VALID`, so a restart or an older record
+format cannot lose a previously approved claim. `UNCLEAR`, `ERROR`, and
+unresolved image evidence are never included.
 
 stripe_match_status
 MATCHED/NO_MATCH/AMBIGUOUS/ERROR.

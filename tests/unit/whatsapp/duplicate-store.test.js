@@ -382,3 +382,31 @@ test('returns recent claimed Stripe charge IDs for multi-match recovery', () => 
   store.claimTransaction('stripe:ch_new', { processingId: 'wa-new', groupIdHash: 'group-a' });
   assert.deepEqual(new Set(store.getClaimedTransactionIds()), new Set(['ch_new', 'ch_old']));
 });
+
+test('recovers claimed Stripe charge IDs from valid image evidence', () => {
+  const store = createDuplicateStore({ filePath: temporaryPath() });
+  const sha256 = '9'.repeat(64);
+  store.claimImage({ sha256, processingId: 'wa-valid-image', groupIdHash: 'group-a' });
+  store.registerImageEvidence({
+    sha256,
+    stripeChargeId: 'ch_recovered_from_image',
+    verificationVerdict: 'VALID',
+    processingId: 'wa-valid-image',
+  });
+
+  assert.deepEqual(store.getClaimedTransactionIds(), ['ch_recovered_from_image']);
+});
+
+test('does not recover unresolved image evidence as a claimed Stripe charge', () => {
+  const store = createDuplicateStore({ filePath: temporaryPath() });
+  const sha256 = '8'.repeat(64);
+  store.claimImage({ sha256, processingId: 'wa-review-image', groupIdHash: 'group-a' });
+  store.registerImageEvidence({
+    sha256,
+    stripeChargeId: 'ch_unresolved_image',
+    verificationVerdict: 'UNCLEAR',
+    processingId: 'wa-review-image',
+  });
+
+  assert.deepEqual(store.getClaimedTransactionIds(), []);
+});

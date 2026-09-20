@@ -167,6 +167,13 @@ uses multiple bot processes or hosts, replace it with a shared transactional
 store before rollout; otherwise two processes can claim the same image or
 Stripe charge concurrently.
 
+The claimed Stripe-charge recovery list is rebuilt from both the transaction
+claim ledger and persisted image evidence marked `VALID`. This preserves
+multi-match recovery after a restart or when an older valid record did not
+populate the newer transaction ledger. Only a canonical charge attached to an
+explicitly valid result is reused; review, error, and unresolved records never
+exclude a candidate or create an approval.
+
 ## Screenshot processing queue
 
 The Baileys adapter uses a durable local queue at `PROCESSING_QUEUE_PATH`

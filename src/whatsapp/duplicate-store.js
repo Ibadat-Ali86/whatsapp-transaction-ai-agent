@@ -534,11 +534,42 @@ function createDuplicateStore({
 
     getClaimedTransactionIds(limit = 2048) {
       const safeLimit = Number.isInteger(limit) && limit > 0 ? limit : 2048;
-      return Object.entries(state.transactions)
-        .filter(([key, record]) => key.startsWith('stripe:') && record && Number.isInteger(record.first_seen_at))
+      prune();
+
+      // The transaction ledger is the normal source of claims. Keep valid
+      // image evidence as a compatibility/recovery source as well: records
+      // written by an older bot version, or a process that completed image
+      // registration before a restart, can contain a canonical Stripe charge
+      // without a corresponding entry in state.transactions. Only evidence
+      // explicitly marked VALID is eligible here; unresolved/review records
+      // must never exclude a Stripe charge or influence approval.
+      const claimed = new Map();
+      const remember = (chargeId, firstSeenAt) => {
+        if (typeof chargeId !== 'string' || !chargeId.trim()) return;
+        const normalizedChargeId = chargeId.trim();
+        const timestamp = Number.isInteger(firstSeenAt) ? firstSeenAt : 0;
+        const existing = claimed.get(normalizedChargeId);
+        if (!existing || timestamp > existing.first_seen_at) {
+          claimed.set(normalizedChargeId, { first_seen_at: timestamp });
+        }
+      };
+
+      for (const [key, record] of Object.entries(state.transactions)) {
+        if (!key.startsWith('stripe:') || !record || !Number.isInteger(record.first_seen_at)) continue;
+        remember(key.slice('stripe:'.length), record.first_seen_at);
+      }
+
+      for (const record of Object.values(state.images)) {
+        for (const occurrence of imageOccurrences(record)) {
+          if (occurrence?.verification_verdict !== 'VALID') continue;
+          remember(occurrence.stripe_charge_id, occurrence.first_seen_at || record?.first_seen_at);
+        }
+      }
+
+      return [...claimed.entries()]
         .sort(([, left], [, right]) => right.first_seen_at - left.first_seen_at)
         .slice(0, safeLimit)
-        .map(([key]) => key.slice('stripe:'.length));
+        .map(([chargeId]) => chargeId);
     },
   };
 }
