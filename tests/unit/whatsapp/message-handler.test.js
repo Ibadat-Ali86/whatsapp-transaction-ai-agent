@@ -419,7 +419,7 @@ test('marks an exact screenshot resend as a duplicate across groups', async () =
 
   assert.deepEqual(replies[0].react, { text: '✅', key: captionedImageMessage('1234567890-1234567890@g.us', 'first-message').key });
   assert.match(replies[1].text, /Duplicate Screenshot/);
-  assert.match(replies[1].text, /DUPLICATE_IMAGE_SHA256/);
+  assert.match(replies[1].text, /DUPLICATE_IMAGE_SHA256_CONFIRMED/);
   assert.match(replies[1].text, /the group "Primary Review Group"/);
   assert.match(replies[1].text, /Original Processing ID: wa-/);
   assert.match(replies[1].text, /Proof: both submissions resolved to Stripe charge ch-image-test/);
@@ -431,14 +431,14 @@ test('marks an exact screenshot resend as a duplicate across groups', async () =
   )));
 });
 
-test('does not call an identical image a duplicate when Stripe resolves a new charge', async () => {
-  const reactions = [];
-  const sock = { sendMessage: async (_jid, content) => reactions.push(content) };
+test('does not re-approve an identical image after its first Stripe payment is valid', async () => {
+  const sent = [];
+  const sock = { sendMessage: async (jid, content) => sent.push({ jid, content }) };
   const store = duplicateStore();
   let verificationCalls = 0;
   const handler = createMessageHandler(sock, {
     ALLOWED_GROUP_JIDS: ['1234567890-1234567890@g.us'],
-    BOT_REPLY_ENABLED: false,
+    BOT_REPLY_ENABLED: true,
     BOT_REACTIONS_ENABLED: true,
     REQUIRE_EMAIL_CAPTION: true,
     N8N_ENABLED: true,
@@ -462,8 +462,47 @@ test('does not call an identical image a duplicate when Stripe resolves a new ch
   await handler({ messages: [captionedImageMessage('1234567890-1234567890@g.us', 'same-image-first')] });
   await handler({ messages: [captionedImageMessage('1234567890-1234567890@g.us', 'same-image-second')] });
 
-  assert.equal(reactions.length, 2);
-  assert.deepEqual(reactions.map(event => event.react?.text), ['✅', '✅']);
+  assert.equal(verificationCalls, 1, 'the already-approved exact image must not be sent to Stripe again');
+  assert.ok(sent.some(event => /DUPLICATE_IMAGE_SHA256_CONFIRMED/.test(event.content?.text || '')));
+  assert.ok(sent.some(event => /Original Screenshot Reference/.test(event.content?.text || '')));
+  assert.equal(sent.filter(event => event.content?.react?.text === '✅').length, 2);
+});
+
+test('keeps an approved screenshot protected after 59 later screenshots', async () => {
+  const sent = [];
+  let verificationCalls = 0;
+  const groupId = '1234567890-1234567890@g.us';
+  const handler = createMessageHandler({
+    sendMessage: async (_jid, content) => sent.push(content),
+  }, {
+    ALLOWED_GROUP_JIDS: [groupId],
+    BOT_REPLY_ENABLED: false,
+    BOT_REACTIONS_ENABLED: true,
+    REQUIRE_EMAIL_CAPTION: true,
+    N8N_ENABLED: false,
+  }, logger, {
+    duplicateStore: duplicateStore(),
+    downloadImage: async (_sock, message) => ({
+      imageBytes: Buffer.from(message.key.id === 'first-message' || message.key.id === 'first-image-resend'
+        ? 'first-approved-image'
+        : `later-image-${message.key.id}`),
+      mimeType: 'image/png',
+      tempPath: null,
+    }),
+    processImageOCR: async params => ({
+      fields: { email: params.captionEmail, amount_cents: 500 },
+      verification: { verdict: 'VALID', stripe_charge_id: `ch-burst-${++verificationCalls}` },
+    }),
+  });
+
+  for (let index = 0; index < 60; index += 1) {
+    const id = index === 0 ? 'first-message' : index === 59 ? 'first-image-resend' : `later-message-${index}`;
+    await handler({ messages: [captionedImageMessage(groupId, id)] });
+  }
+
+  assert.equal(verificationCalls, 59, 'the 60th exact resend must not be re-verified as a new payment');
+  assert.equal(sent.length, 60);
+  assert.equal(sent[59].react.text, '✅', 'the original screenshot receives the duplicate annotation reaction');
 });
 
 test('marks a repeated Stripe charge as a transaction duplicate', async () => {

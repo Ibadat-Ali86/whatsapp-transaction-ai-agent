@@ -118,6 +118,25 @@ test('formats an ambiguous payment as review-required rather than fake', () => {
   assert.match(reply, /not a fraud determination/);
 });
 
+test('explains why a visually matching receipt with a different Stripe charge is blocked', () => {
+  const reply = formatVerificationFailureReply({
+    verification: {
+      verdict: 'UNCLEAR',
+      reason_code: 'IMAGE_MATCH_DIFFERENT_STRIPE_CHARGE',
+      candidate_count: 1,
+      image_conflict_original_processing_id: 'wa-original',
+      image_conflict_original_stripe_charge_id: 'ch-original',
+      stripe_charge_id: 'ch-current',
+    },
+  }, 'wa-conflict');
+
+  assert.match(reply, /previously approved receipt image matched/);
+  assert.match(reply, /Prior matching screenshot: wa-original/);
+  assert.match(reply, /Prior Stripe charge: ch-original/);
+  assert.match(reply, /Current Stripe charge: ch-current/);
+  assert.match(reply, /Automatic approval was blocked/);
+});
+
 test('makes local OCR fallback visible without exposing provider details', () => {
   const reply = formatOcrReply({
     provider: 'tesseract',

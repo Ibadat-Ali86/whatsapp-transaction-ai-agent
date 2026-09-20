@@ -57,6 +57,13 @@ function imageOccurrences(record) {
     .filter(occurrence => occurrence && typeof occurrence === 'object');
 }
 
+function confirmedStripeChargeIds(record) {
+  return [...new Set(imageOccurrences(record)
+    .filter(occurrence => occurrence.verification_verdict === 'VALID')
+    .map(occurrence => occurrence.stripe_charge_id)
+    .filter(chargeId => typeof chargeId === 'string' && chargeId.length > 0))];
+}
+
 function receiptFingerprint({
   captionEmail,
   amountCents,
@@ -155,7 +162,14 @@ function createDuplicateStore({
       if (existing?.processing_id === processingId && existing.status === 'PROCESSING') {
         return { duplicate: false, resumed: true, record: existing };
       }
-      if (existing) return { duplicate: true, matchType: 'SHA256', record: existing };
+      if (existing) {
+        return {
+          duplicate: true,
+          matchType: 'SHA256',
+          record: existing,
+          confirmed_stripe_charge_ids: confirmedStripeChargeIds(existing),
+        };
+      }
 
       const record = {
         processing_id: processingId,
@@ -236,22 +250,45 @@ function createDuplicateStore({
       }
 
       const currentFingerprint = currentEvidence?.evidence_fingerprint;
+      let conflictingMatch = null;
       if (typeof phash === 'string' && currentFingerprint && typeof stripeChargeId === 'string' && stripeChargeId) {
         for (const [otherSha256, record] of Object.entries(state.images)) {
           if (otherSha256 === sha256 || record.status !== 'COMPLETED') continue;
           for (const occurrence of imageOccurrences(record)) {
             if (occurrence.verification_verdict && occurrence.verification_verdict !== 'VALID') continue;
             if (occurrence.evidence_fingerprint !== currentFingerprint) continue;
-            // Visual similarity is only duplicate proof when both images
-            // resolve to the same canonical Stripe charge.
-            if (!occurrence.stripe_charge_id || occurrence.stripe_charge_id !== stripeChargeId) continue;
             const distance = hammingDistance(phash, occurrence.phash);
             if (distance !== null && distance <= phashMaxDistance) {
-              persist();
-              return { duplicate: true, matchType: 'PHASH', record: occurrence, distance };
+              // Visual similarity is duplicate proof only when both images
+              // resolve to the same canonical Stripe charge.
+              if (occurrence.stripe_charge_id && occurrence.stripe_charge_id === stripeChargeId) {
+                persist();
+                return { duplicate: true, matchType: 'PHASH', record: occurrence, distance };
+              }
+              if (occurrence.stripe_charge_id && occurrence.stripe_charge_id !== stripeChargeId) {
+                // A visually equivalent receipt with a different Stripe
+                // charge is not proof of a new payment. Preserve the evidence
+                // but block automatic approval so the caller can return an
+                // auditable review.
+                conflictingMatch = { record: occurrence, distance };
+              }
             }
           }
         }
+      }
+      if (conflictingMatch) {
+        if (currentEvidence) {
+          currentEvidence.verification_verdict = 'UNCLEAR';
+          currentEvidence.verification_reason = 'IMAGE_MATCH_DIFFERENT_STRIPE_CHARGE';
+        }
+        persist();
+        return {
+          duplicate: false,
+          conflict: true,
+          matchType: 'PHASH_DIFFERENT_STRIPE_CHARGE',
+          record: conflictingMatch.record,
+          distance: conflictingMatch.distance,
+        };
       }
       persist();
       return { duplicate: false, record: currentEvidence || current || null };

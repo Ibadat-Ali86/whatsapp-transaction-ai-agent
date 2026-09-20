@@ -101,6 +101,7 @@ function formatVerificationFailureReply(ocrResult, processingId) {
     STRIPE_PAGINATION_LIMIT: 'Stripe search reached its safety limit before a unique payment could be confirmed.',
     STRIPE_DISABLED: 'Stripe verification is disabled for this bot instance.',
     STRIPE_LOOKUP_PENDING: 'Stripe verification did not return a completed result.',
+    IMAGE_MATCH_DIFFERENT_STRIPE_CHARGE: 'A previously approved receipt image matched this submission, but Stripe returned a different charge. Automatic approval was blocked because the image evidence conflicts with the new payment record.',
     STRIPE_NETWORK_ERROR: 'Stripe could not be reached; the payment was not approved.',
     STRIPE_API_ERROR: 'Stripe returned an API error; the payment was not approved.',
     PROCESSING_FAILED: 'The payment pipeline failed before verification completed; the payment was not approved.',
@@ -114,7 +115,10 @@ function formatVerificationFailureReply(ocrResult, processingId) {
   const sameImageNote = verification.same_image_candidate
     ? `\n🖼️ Same image candidate only: ${verification.same_image_original_processing_id || 'previous processing'}${verification.same_image_original_group_name ? ` in ${verification.same_image_original_group_name}` : ''}. Stripe did not prove the same payment, so this was not labelled duplicate.`
     : '';
-  return `${heading}\n📋 Processing ID: ${processingId}\n\n${reasonText}\n🧾 Verification reason: ${reason}\n📊 Stripe candidates reviewed: ${candidateCount ?? 'not available'}${sameImageNote}\n\n${conclusion}`;
+  const imageConflictNote = reason === 'IMAGE_MATCH_DIFFERENT_STRIPE_CHARGE'
+    ? `\n🖼️ Prior matching screenshot: ${verification.image_conflict_original_processing_id || 'previous processing'}\n🔗 Prior Stripe charge: ${verification.image_conflict_original_stripe_charge_id || 'not recorded'}\n🔗 Current Stripe charge: ${verification.stripe_charge_id || 'not recorded'}\nAutomatic approval was blocked because the receipt image conflicts with the current Stripe record.`
+    : '';
+  return `${heading}\n📋 Processing ID: ${processingId}\n\n${reasonText}\n🧾 Verification reason: ${reason}\n📊 Stripe candidates reviewed: ${candidateCount ?? 'not available'}${sameImageNote}${imageConflictNote}\n\n${conclusion}`;
 }
 
 /**

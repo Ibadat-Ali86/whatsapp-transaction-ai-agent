@@ -15,7 +15,13 @@ test('claims exact image hashes and persists records across store instances', ()
   const first = createDuplicateStore({ filePath });
   const claim = first.claimImage({ sha256, processingId: 'wa-first', groupIdHash: 'group-a', groupName: 'Alpha Group' });
   assert.equal(claim.duplicate, false);
-  first.registerImageEvidence({ sha256, phash: '0123456789abcdef', processingId: 'wa-first' });
+  first.registerImageEvidence({
+    sha256,
+    phash: '0123456789abcdef',
+    stripeChargeId: 'ch_first_payment',
+    verificationVerdict: 'VALID',
+    processingId: 'wa-first',
+  });
 
   const second = createDuplicateStore({ filePath });
   const duplicate = second.claimImage({ sha256, processingId: 'wa-second', groupIdHash: 'group-b' });
@@ -23,6 +29,7 @@ test('claims exact image hashes and persists records across store instances', ()
   assert.equal(duplicate.matchType, 'SHA256');
   assert.equal(duplicate.record.processing_id, 'wa-first');
   assert.equal(duplicate.record.group_name, 'Alpha Group');
+  assert.deepEqual(duplicate.confirmed_stripe_charge_ids, ['ch_first_payment']);
   fs.unlinkSync(filePath);
 });
 
@@ -88,6 +95,42 @@ test('does not classify visually similar receipts for different Stripe charges',
     processingId: 'wa-second',
   });
   assert.equal(result.duplicate, false);
+  assert.equal(result.conflict, true);
+});
+
+test('returns a conflict for visually similar receipts with a different Stripe charge', () => {
+  const store = createDuplicateStore({ filePath: temporaryPath(), phashMaxDistance: 6 });
+  const firstSha = '3'.repeat(64);
+  const secondSha = '4'.repeat(64);
+  const sharedEvidence = {
+    captionEmail: 'customer@example.com',
+    amountCents: 2000,
+    paymentDate: '2026-09-18',
+    paymentHour: 20,
+    minutes: 13,
+  };
+  store.claimImage({ sha256: firstSha, processingId: 'wa-first', groupIdHash: 'group-a' });
+  store.registerImageEvidence({
+    sha256: firstSha,
+    phash: '0000000000000000',
+    stripeChargeId: 'ch_first_payment',
+    verificationVerdict: 'VALID',
+    ...sharedEvidence,
+    processingId: 'wa-first',
+  });
+  store.claimImage({ sha256: secondSha, processingId: 'wa-second', groupIdHash: 'group-a' });
+  const result = store.registerImageEvidence({
+    sha256: secondSha,
+    phash: '0000000000000001',
+    stripeChargeId: 'ch_second_payment',
+    verificationVerdict: 'VALID',
+    ...sharedEvidence,
+    processingId: 'wa-second',
+  });
+  assert.equal(result.duplicate, false);
+  assert.equal(result.conflict, true);
+  assert.equal(result.matchType, 'PHASH_DIFFERENT_STRIPE_CHARGE');
+  assert.equal(result.record.stripe_charge_id, 'ch_first_payment');
 });
 
 test('does not classify same-email same-amount payments with different receipt times as pHash duplicates', () => {

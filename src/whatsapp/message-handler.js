@@ -197,9 +197,47 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
         message,
         captionEmail: job.caption_email,
       });
-      // An exact image hash is only a duplicate candidate. The same image
-      // asset can be submitted for a different Stripe payment, so Stripe
-      // must resolve the canonical charge before this becomes a duplicate.
+      // A previously approved exact image is a terminal duplicate. This check
+      // must happen before Stripe's "one fresh candidate" recovery rule can
+      // reinterpret the same already-approved receipt as a new payment.
+      const confirmedImageChargeIds = Array.isArray(imageClaim.confirmed_stripe_charge_ids)
+        ? imageClaim.confirmed_stripe_charge_ids
+        : [];
+      if (imageClaim.duplicate && confirmedImageChargeIds.length > 0) {
+        const duplicateResult = {
+          provider: 'duplicate-detector',
+          confidence: 1,
+          fields: { email: job.caption_email },
+          verification: {
+            status: 'DUPLICATE',
+            verdict: 'DUPLICATE',
+            reason_code: 'DUPLICATE_IMAGE_SHA256_CONFIRMED',
+            duplicate_of_processing_id: imageClaim.record.processing_id,
+            duplicate_scope: duplicateScope(imageClaim.record, groupId),
+            duplicate_group_name: imageClaim.record.group_name,
+            stripe_charge_id: confirmedImageChargeIds[0],
+            confirmed_stripe_charge_ids: confirmedImageChargeIds,
+          },
+        };
+        if (config.BOT_REPLY_ENABLED) {
+          await currentSock.sendMessage(groupId, {
+            text: formatDuplicateReply(duplicateResult, job.processing_id, {
+              groupScope: duplicateResult.verification.duplicate_scope,
+              originalGroupName: duplicateResult.verification.duplicate_group_name,
+            }),
+          }, { quoted: message });
+        }
+        await notifyOriginalDuplicate(imageClaim.record, job.processing_id);
+        logger.info({
+          processingId: job.processing_id,
+          duration_ms: Date.now() - startTime,
+          verdict: 'DUPLICATE',
+          verification_status: 'DUPLICATE',
+          verification_reason: 'DUPLICATE_IMAGE_SHA256_CONFIRMED',
+          stripe_charge_id: confirmedImageChargeIds[0],
+        }, 'Previously approved exact screenshot rejected as duplicate');
+        return { status: 'COMPLETED', verdict: 'DUPLICATE', processing_id: job.processing_id };
+      }
 
       const imageBase64 = imageBytes.toString('base64');
       const claimedStripeChargeIds = duplicateStore.getClaimedTransactionIds();
@@ -256,7 +294,20 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
       });
       let finalResult = ocrResult;
       let duplicateRecord = null;
-      if (imageEvidence.duplicate) {
+      if (imageEvidence.conflict) {
+        finalResult = {
+          ...ocrResult,
+          verification: {
+            ...(ocrResult.verification || {}),
+            status: 'CONFLICT',
+            verdict: 'UNCLEAR',
+            reason_code: 'IMAGE_MATCH_DIFFERENT_STRIPE_CHARGE',
+            image_conflict_original_processing_id: imageEvidence.record.processing_id,
+            image_conflict_original_stripe_charge_id: imageEvidence.record.stripe_charge_id,
+            image_conflict_distance: imageEvidence.distance,
+          },
+        };
+      } else if (imageEvidence.duplicate) {
         finalResult = {
           ...ocrResult,
           verification: {

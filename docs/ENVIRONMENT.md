@@ -136,7 +136,12 @@ with pHash only after both receipts resolve to the same canonical Stripe
 charge ID. Email, amount, and displayed time alone are not duplicate proof
 because one customer can make multiple same-amount payments in the same
 minute. A uniquely matched Stripe charge ID is independently claimed so the
-same payment is marked duplicate even when the image changes.
+same payment is marked duplicate even when the image changes. An exact
+SHA-256 resend of an image that was already marked `VALID` is a terminal
+duplicate before the fresh-payment fallback runs; it cannot be re-approved as
+a new payment. A visually equivalent image that resolves to a different
+Stripe charge is blocked as `UNCLEAR` for review rather than automatically
+approved.
 
 Duplicate records retain the first-seen group-name snapshot when WhatsApp
 metadata is available. Duplicate replies include the original processing ID,
