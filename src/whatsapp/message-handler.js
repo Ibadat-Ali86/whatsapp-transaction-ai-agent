@@ -299,6 +299,19 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
         messageKey: message.key,
         message,
       });
+      logger.info({
+        processingId: job.processing_id,
+        duplicate_evidence: {
+          exact_sha_claimed: Boolean(imageClaim.duplicate),
+          phash_available: typeof ocrResult?.image_phash === 'string',
+          transaction_id_available: typeof fields.transaction_id === 'string' && fields.transaction_id.length > 0,
+          customer_name_available: Boolean(ocrResult?.verification?.matched_transaction?.customer_name || fields.customer_name),
+          amount_available: Number.isInteger(fields.amount_cents),
+          receipt_date_available: Boolean(fields.payment_date || (fields.payment_month && fields.payment_day)),
+          receipt_time_available: fields.payment_hour != null && fields.minutes != null,
+          image_match: imageEvidence.duplicate ? imageEvidence.matchType : imageEvidence.conflict ? 'CONFLICT' : null,
+        },
+      }, 'Duplicate evidence evaluated');
       let finalResult = ocrResult;
       let duplicateRecord = null;
       if (imageEvidence.conflict) {

@@ -146,6 +146,8 @@ function formatDuplicateReply(ocrResult, processingId, { groupScope = null, orig
         ? 'a visually equivalent copy with the same payment identifier was already processed'
       : reason === 'DUPLICATE_IMAGE_PHASH_RECEIPT_EVIDENCE'
         ? 'a visually equivalent copy with the same receipt customer, amount, and time evidence was already processed'
+      : reason === 'DUPLICATE_IMAGE_PHASH_VISUAL_RECEIPT'
+        ? 'a visually equivalent copy with the same receipt amount and time evidence was already processed'
       : reason === 'DUPLICATE_IMAGE_TRANSACTION_EVIDENCE'
         ? 'the same payment-specific receipt evidence was already processed'
       : 'the exact screenshot image was already processed';
@@ -160,6 +162,8 @@ function formatDuplicateReply(ocrResult, processingId, { groupScope = null, orig
         ? `\n🔗 Proof: the receipt image is visually equivalent and carries the same payment identifier${transactionId ? ` (${transactionId})` : ''}. Stripe did not return a new canonical charge, so no second approval was recorded.`
         : reason === 'DUPLICATE_IMAGE_PHASH_RECEIPT_EVIDENCE'
           ? '\n🔗 Proof: the receipt image is visually equivalent and carries the same customer, amount, and receipt time evidence. Stripe did not return a new canonical charge, so no second approval was recorded.'
+        : reason === 'DUPLICATE_IMAGE_PHASH_VISUAL_RECEIPT'
+          ? '\n🔗 Proof: the receipt image has the same strict visual fingerprint and the same amount and complete receipt time. OCR identifier text can vary after image processing, so no second approval was recorded.'
         : reason === 'DUPLICATE_IMAGE_TRANSACTION_EVIDENCE'
           ? `\n🔗 Proof: the stored receipt evidence carries the same payment identifier${transactionId ? ` (${transactionId})` : ''}, amount, and receipt time as the original. No second approval was recorded.`
         : '\n🔗 Proof: the duplicate decision is backed by the stored payment-specific receipt evidence; no second approval was recorded.';

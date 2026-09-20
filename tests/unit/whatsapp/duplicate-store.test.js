@@ -310,6 +310,72 @@ test('uses customer, amount, date, and time plus pHash when the identifier is no
   assert.equal(result.matchType, 'PHASH_RECEIPT_EVIDENCE');
 });
 
+test('detects a re-encoded repeat when OCR misreads the identifier and misses the customer', () => {
+  const store = createDuplicateStore({ filePath: temporaryPath(), phashMaxDistance: 6 });
+  const firstSha = 'd'.repeat(64);
+  const secondSha = 'e'.repeat(64);
+  const sharedReceipt = {
+    amountCents: 500,
+    paymentMonth: 9,
+    paymentDay: 18,
+    paymentHour: 22,
+    minutes: 56,
+  };
+  store.claimImage({ sha256: firstSha, processingId: 'wa-first', groupIdHash: 'group-a' });
+  store.registerImageEvidence({
+    sha256: firstSha,
+    phash: 'c2c3e4f0989c7f07',
+    transactionId: 'TJZWHT1ZO',
+    verificationVerdict: 'UNCLEAR',
+    ...sharedReceipt,
+    processingId: 'wa-first',
+  });
+  store.claimImage({ sha256: secondSha, processingId: 'wa-second', groupIdHash: 'group-b' });
+  const result = store.registerImageEvidence({
+    sha256: secondSha,
+    phash: 'c2c3e4f0989c7f07',
+    transactionId: 'TJ2WHT1Z0',
+    verificationVerdict: 'UNCLEAR',
+    ...sharedReceipt,
+    processingId: 'wa-second',
+  });
+  assert.equal(result.duplicate, true);
+  assert.equal(result.matchType, 'PHASH_VISUAL_RECEIPT');
+  assert.equal(result.record.processing_id, 'wa-first');
+});
+
+test('does not use the visual-only fallback for a non-identical pHash', () => {
+  const store = createDuplicateStore({ filePath: temporaryPath(), phashMaxDistance: 6 });
+  const firstSha = 'f'.repeat(64);
+  const secondSha = '0'.repeat(64);
+  const sharedReceipt = {
+    amountCents: 500,
+    paymentMonth: 9,
+    paymentDay: 18,
+    paymentHour: 22,
+    minutes: 56,
+  };
+  store.claimImage({ sha256: firstSha, processingId: 'wa-first', groupIdHash: 'group-a' });
+  store.registerImageEvidence({
+    sha256: firstSha,
+    phash: 'c2c3e4f0989c7f07',
+    transactionId: 'TJZWHT1ZO',
+    verificationVerdict: 'UNCLEAR',
+    ...sharedReceipt,
+    processingId: 'wa-first',
+  });
+  store.claimImage({ sha256: secondSha, processingId: 'wa-second', groupIdHash: 'group-b' });
+  const result = store.registerImageEvidence({
+    sha256: secondSha,
+    phash: 'c2c3e4f0989c7f00',
+    transactionId: 'TJ2WHT1Z0',
+    verificationVerdict: 'UNCLEAR',
+    ...sharedReceipt,
+    processingId: 'wa-second',
+  });
+  assert.equal(result.duplicate, false);
+});
+
 test('returns recent claimed Stripe charge IDs for multi-match recovery', () => {
   const store = createDuplicateStore({ filePath: temporaryPath() });
   store.claimTransaction('stripe:ch_old', { processingId: 'wa-old', groupIdHash: 'group-a' });

@@ -139,7 +139,9 @@ approval while still preserving the first unresolved record for review.
 Recompressed/resized copies are compared with a normalized payment-evidence
 fingerprint first when the receipt contains the same payment-specific
 transaction identifier. If OCR cannot read that identifier, pHash may be used
-only with the same customer name, amount, and complete receipt date/time;
+only with the same customer name, amount, and complete receipt date/time, or
+with a strict visual receipt fingerprint, exact pHash equality, and the same
+amount and complete receipt date/time when OCR has misread the identifier;
 email, amount, and displayed time alone are not duplicate proof because one
 customer can make multiple same-amount payments in the same minute. When Stripe resolves both
 copies, the canonical charge ID remains the strongest proof. If a visually

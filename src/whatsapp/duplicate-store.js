@@ -85,6 +85,7 @@ function receiptFingerprint({
   paymentHour,
   minutes,
   includeCustomerName = true,
+  includeTransactionId = true,
 }) {
   const email = captionEmail ? emailHash(captionEmail) : null;
   const normalizedTransactionId = typeof transactionId === 'string' && transactionId.trim()
@@ -101,7 +102,7 @@ function receiptFingerprint({
   return crypto.createHash('sha256').update(JSON.stringify({
     email,
     amount_cents: Number.isInteger(amountCents) ? amountCents : null,
-    transaction_id: normalizedTransactionId,
+    transaction_id: includeTransactionId ? normalizedTransactionId : null,
     customer_name: includeCustomerName ? storedCustomerName(customerName) : null,
     payment_date: typeof paymentDate === 'string' ? paymentDate : null,
     payment_month: Number.isInteger(paymentMonth) ? paymentMonth : null,
@@ -109,6 +110,39 @@ function receiptFingerprint({
     payment_hour: Number.isInteger(paymentHour) ? paymentHour : null,
     minutes: Number.isInteger(minutes) ? minutes : null,
   })).digest('hex').slice(0, 32);
+}
+
+function visualReceiptFingerprint({
+  amountCents,
+  paymentDate,
+  paymentMonth,
+  paymentDay,
+  paymentHour,
+  minutes,
+}) {
+  const hasDate = typeof paymentDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(paymentDate)
+    || Number.isInteger(paymentMonth) && Number.isInteger(paymentDay);
+  const hasTime = Number.isInteger(paymentHour) && Number.isInteger(minutes);
+  if (!Number.isInteger(amountCents) || amountCents <= 0 || !hasDate || !hasTime) return null;
+  return crypto.createHash('sha256').update(JSON.stringify({
+    amount_cents: amountCents,
+    payment_date: typeof paymentDate === 'string' ? paymentDate : null,
+    payment_month: Number.isInteger(paymentMonth) ? paymentMonth : null,
+    payment_day: Number.isInteger(paymentDay) ? paymentDay : null,
+    payment_hour: Number.isInteger(paymentHour) ? paymentHour : null,
+    minutes: Number.isInteger(minutes) ? minutes : null,
+  })).digest('hex').slice(0, 32);
+}
+
+function occurrenceVisualReceiptFingerprint(occurrence) {
+  return occurrence?.visual_evidence_fingerprint || visualReceiptFingerprint({
+    amountCents: occurrence?.amount_cents,
+    paymentDate: occurrence?.payment_date,
+    paymentMonth: occurrence?.payment_month,
+    paymentDay: occurrence?.payment_day,
+    paymentHour: occurrence?.payment_hour,
+    minutes: occurrence?.minutes,
+  });
 }
 
 function createDuplicateStore({
@@ -253,6 +287,14 @@ function createDuplicateStore({
             paymentHour,
             minutes,
           }),
+          visual_evidence_fingerprint: visualReceiptFingerprint({
+            amountCents,
+            paymentDate,
+            paymentMonth,
+            paymentDay,
+            paymentHour,
+            minutes,
+          }),
           legacy_evidence_fingerprint: receiptFingerprint({
             captionEmail,
             amountCents,
@@ -288,6 +330,7 @@ function createDuplicateStore({
       }
 
       const currentFingerprint = currentEvidence?.evidence_fingerprint;
+      const currentVisualFingerprint = currentEvidence?.visual_evidence_fingerprint;
       let conflictingMatch = null;
 
       // The normalized receipt fingerprint is stronger than visual
@@ -348,20 +391,24 @@ function createDuplicateStore({
 
       if (
         typeof phash === 'string'
-        && currentFingerprint
+        && (currentFingerprint || currentVisualFingerprint)
         && (
           (typeof stripeChargeId === 'string' && stripeChargeId)
           || currentTransactionId
           || currentCustomerName
+          || currentVisualFingerprint
         )
       ) {
         for (const [otherSha256, record] of Object.entries(state.images)) {
           if (otherSha256 === sha256 || record.status !== 'COMPLETED') continue;
           for (const occurrence of imageOccurrences(record)) {
-            if (![
+            const sameEvidenceFingerprint = [
               currentFingerprint,
               currentEvidence?.legacy_evidence_fingerprint,
-            ].includes(occurrence.evidence_fingerprint)) continue;
+            ].includes(occurrence.evidence_fingerprint);
+            const sameVisualFingerprint = currentVisualFingerprint
+              && occurrenceVisualReceiptFingerprint(occurrence) === currentVisualFingerprint;
+            if (!sameEvidenceFingerprint && !sameVisualFingerprint) continue;
             const distance = hammingDistance(phash, occurrence.phash);
             if (distance !== null && distance <= phashMaxDistance) {
               // Visual similarity is duplicate proof only when both images
@@ -376,6 +423,7 @@ function createDuplicateStore({
                 // but block automatic approval so the caller can return an
                 // auditable review.
                 conflictingMatch = { record: occurrence, distance };
+                continue;
               }
               // When Stripe was unavailable or OCR did not produce a usable
               // lookup, an exact payment identifier plus near-identical
@@ -393,20 +441,40 @@ function createDuplicateStore({
                 && currentCustomerName
                 && storedCustomerName(occurrence.customer_name) === currentCustomerName;
               const samePaymentEvidence = sameTransactionId || sameCustomerReceipt;
+              // The visual-only fallback is deliberately stricter than the
+              // normal pHash near-match path. Exact pHash equality is needed
+              // because amount/date/time can repeat across legitimate
+              // payments; the visual signal must represent the same receipt,
+              // not merely the same Cash App layout.
+              const sameVisualReceipt = Boolean(sameVisualFingerprint) && distance === 0;
+              const sameDuplicateEvidence = samePaymentEvidence || sameVisualReceipt;
               if (
-                samePaymentEvidence
-                && !occurrence.stripe_charge_id
-                && !stripeChargeId
+                sameDuplicateEvidence
+                && (
+                  occurrence.stripe_charge_id
+                  || stripeChargeId
+                  || !occurrence.stripe_charge_id && !stripeChargeId
+                )
               ) {
+                if (!occurrence.stripe_charge_id && stripeChargeId) continue;
                 persist();
                 return {
                   duplicate: true,
-                  matchType: sameTransactionId ? 'PHASH_TRANSACTION_ID' : 'PHASH_RECEIPT_EVIDENCE',
+                  matchType: sameVisualReceipt
+                    && !samePaymentEvidence
+                    ? 'PHASH_VISUAL_RECEIPT'
+                    : sameTransactionId ? 'PHASH_TRANSACTION_ID' : 'PHASH_RECEIPT_EVIDENCE',
                   record: occurrence,
                   distance,
                   proof: {
                     transaction_id: storedTransactionId(currentEvidence.transaction_id),
                     customer_name: currentCustomerName,
+                    amount_cents: currentEvidence.amount_cents,
+                    payment_month: currentEvidence.payment_month,
+                    payment_day: currentEvidence.payment_day,
+                    payment_hour: currentEvidence.payment_hour,
+                    minutes: currentEvidence.minutes,
+                    visual_evidence_fingerprint: currentVisualFingerprint,
                     evidence_fingerprint: currentFingerprint,
                   },
                 };
