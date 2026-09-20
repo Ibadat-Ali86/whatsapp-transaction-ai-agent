@@ -12,8 +12,10 @@ WhatsApp message ID duplicate
        -> OCR + Stripe verification
   -> same uniquely matched Stripe charge ID?
        -> DUPLICATE transaction
-  -> same pHash + same payment identifier?
+  -> same payment evidence fingerprint?
        -> DUPLICATE recompressed/resized image
+  -> same customer + amount + complete receipt time + pHash?
+       -> DUPLICATE when the payment identifier is not OCR-readable
   -> otherwise
        -> ORIGINAL / VALID when Stripe is VALID
 ```
@@ -21,9 +23,11 @@ WhatsApp message ID duplicate
 `VALID` is never inferred from an image hash. Stripe must return one eligible
 succeeded charge. A pHash near-match is not sufficient by itself: email,
 amount, and receipt time are not unique when a customer makes multiple
-payments. The unresolved near-match path requires the same explicit
-payment-specific identifier on both records; the Stripe-resolved path still
-requires the same canonical Stripe charge ID. If the current attempt is the
+payments. The unresolved evidence path requires the same explicit
+payment-specific identifier on both records, or the same customer, amount,
+complete receipt date/time, and pHash when the identifier is not OCR-readable;
+the Stripe-resolved path still requires the same canonical Stripe charge ID.
+If the current attempt is the
 first one that resolves a fresh charge while the earlier matching attempt was
 unresolved, the current attempt may become the one valid claim. `DUPLICATE` is
 a non-approving verdict and includes the first processing ID for audit

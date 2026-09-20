@@ -144,6 +144,10 @@ function formatDuplicateReply(ocrResult, processingId, { groupScope = null, orig
       ? 'a visually equivalent copy of the screenshot was already processed'
       : reason === 'DUPLICATE_IMAGE_PHASH_TRANSACTION_ID'
         ? 'a visually equivalent copy with the same payment identifier was already processed'
+      : reason === 'DUPLICATE_IMAGE_PHASH_RECEIPT_EVIDENCE'
+        ? 'a visually equivalent copy with the same receipt customer, amount, and time evidence was already processed'
+      : reason === 'DUPLICATE_IMAGE_TRANSACTION_EVIDENCE'
+        ? 'the same payment-specific receipt evidence was already processed'
       : 'the exact screenshot image was already processed';
   const stripeCharge = verification.stripe_charge_id || verification.matched_transaction?.stripe_charge_id;
   const duplicateProof = verification.duplicate_proof || {};
@@ -154,6 +158,10 @@ function formatDuplicateReply(ocrResult, processingId, { groupScope = null, orig
       ? `\n🔐 Proof: the downloaded image bytes have the same SHA-256 fingerprint as the original screenshot${duplicateProof.image_sha256 ? ` (${duplicateProof.image_sha256.slice(0, 16)}…)` : ''}. The original attempt was not approved, so this repeat was not approved either.`
       : reason === 'DUPLICATE_IMAGE_PHASH_TRANSACTION_ID'
         ? `\n🔗 Proof: the receipt image is visually equivalent and carries the same payment identifier${transactionId ? ` (${transactionId})` : ''}. Stripe did not return a new canonical charge, so no second approval was recorded.`
+        : reason === 'DUPLICATE_IMAGE_PHASH_RECEIPT_EVIDENCE'
+          ? '\n🔗 Proof: the receipt image is visually equivalent and carries the same customer, amount, and receipt time evidence. Stripe did not return a new canonical charge, so no second approval was recorded.'
+        : reason === 'DUPLICATE_IMAGE_TRANSACTION_EVIDENCE'
+          ? `\n🔗 Proof: the stored receipt evidence carries the same payment identifier${transactionId ? ` (${transactionId})` : ''}, amount, and receipt time as the original. No second approval was recorded.`
         : '\n🔗 Proof: the duplicate decision is backed by the stored payment-specific receipt evidence; no second approval was recorded.';
 
   return `♻️ *Duplicate Screenshot*\n📋 Processing ID: ${processingId}\n\nThis screenshot was already processed in ${scope}; ${reasonText}.\n🧾 Detection reason: ${reason}\n🔁 Original Processing ID: ${originalId}${proof}\n\nThe original screenshot is annotated in its original group when WhatsApp permits cross-group quoting. No second payment verification was recorded.`;

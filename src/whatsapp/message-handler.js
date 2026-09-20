@@ -282,6 +282,7 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
         captionEmail: ocrResult?.verification?.matched_transaction?.customer_email || fields.email || job.caption_email,
         amountCents: fields.amount_cents,
         transactionId: fields.transaction_id,
+        customerName: ocrResult?.verification?.matched_transaction?.customer_name || fields.customer_name,
         paymentDate: fields.payment_date,
         paymentMonth: fields.payment_month,
         paymentDay: fields.payment_day,

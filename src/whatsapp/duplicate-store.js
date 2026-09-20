@@ -68,15 +68,23 @@ function storedTransactionId(value) {
   return typeof value === 'string' && value.trim() ? value.trim().toLowerCase() : null;
 }
 
+function storedCustomerName(value) {
+  return typeof value === 'string' && value.trim()
+    ? value.trim().replace(/\s+/g, ' ').toLowerCase()
+    : null;
+}
+
 function receiptFingerprint({
   captionEmail,
   amountCents,
   transactionId,
+  customerName,
   paymentDate,
   paymentMonth,
   paymentDay,
   paymentHour,
   minutes,
+  includeCustomerName = true,
 }) {
   const email = captionEmail ? emailHash(captionEmail) : null;
   const normalizedTransactionId = typeof transactionId === 'string' && transactionId.trim()
@@ -94,6 +102,7 @@ function receiptFingerprint({
     email,
     amount_cents: Number.isInteger(amountCents) ? amountCents : null,
     transaction_id: normalizedTransactionId,
+    customer_name: includeCustomerName ? storedCustomerName(customerName) : null,
     payment_date: typeof paymentDate === 'string' ? paymentDate : null,
     payment_month: Number.isInteger(paymentMonth) ? paymentMonth : null,
     payment_day: Number.isInteger(paymentDay) ? paymentDay : null,
@@ -203,6 +212,7 @@ function createDuplicateStore({
       captionEmail,
       amountCents,
       transactionId,
+      customerName,
       paymentDate,
       paymentMonth,
       paymentDay,
@@ -226,6 +236,7 @@ function createDuplicateStore({
           email_hash: captionEmail ? emailHash(captionEmail) : null,
           amount_cents: Number.isInteger(amountCents) ? amountCents : null,
           transaction_id: storedTransactionId(transactionId),
+          customer_name: storedCustomerName(customerName),
           payment_date: typeof paymentDate === 'string' ? paymentDate : null,
           payment_month: Number.isInteger(paymentMonth) ? paymentMonth : null,
           payment_day: Number.isInteger(paymentDay) ? paymentDay : null,
@@ -235,11 +246,23 @@ function createDuplicateStore({
             captionEmail,
             amountCents,
             transactionId,
+            customerName,
             paymentDate,
             paymentMonth,
             paymentDay,
             paymentHour,
             minutes,
+          }),
+          legacy_evidence_fingerprint: receiptFingerprint({
+            captionEmail,
+            amountCents,
+            transactionId,
+            paymentDate,
+            paymentMonth,
+            paymentDay,
+            paymentHour,
+            minutes,
+            includeCustomerName: false,
           }),
           stripe_charge_id: typeof stripeChargeId === 'string' ? stripeChargeId : null,
           verification_verdict: typeof verificationVerdict === 'string' ? verificationVerdict : null,
@@ -266,18 +289,79 @@ function createDuplicateStore({
 
       const currentFingerprint = currentEvidence?.evidence_fingerprint;
       let conflictingMatch = null;
+
+      // The normalized receipt fingerprint is stronger than visual
+      // similarity when it contains an explicit payment identifier. WhatsApp
+      // can resize/re-encode an image enough to make pHash unavailable or
+      // exceed its visual threshold, while the same provider identifier,
+      // amount, and receipt time remain stable. Use this deterministic proof
+      // before the visual fallback. A later attempt with the first fresh
+      // Stripe charge is intentionally allowed through when the prior record
+      // was unresolved, so a missed first lookup cannot suppress approval.
+      const currentTransactionId = storedTransactionId(currentEvidence?.transaction_id);
+      const currentCustomerName = storedCustomerName(currentEvidence?.customer_name);
+      if (currentFingerprint && currentTransactionId) {
+        for (const [otherSha256, record] of Object.entries(state.images)) {
+          if (otherSha256 === sha256 || record.status !== 'COMPLETED') continue;
+          for (const occurrence of imageOccurrences(record)) {
+            if (
+              ![
+                currentFingerprint,
+                currentEvidence?.legacy_evidence_fingerprint,
+              ].includes(occurrence.evidence_fingerprint)
+              || storedTransactionId(occurrence.transaction_id) !== currentTransactionId
+            ) continue;
+
+            const priorChargeId = typeof occurrence.stripe_charge_id === 'string' && occurrence.stripe_charge_id
+              ? occurrence.stripe_charge_id
+              : null;
+            const currentChargeId = typeof stripeChargeId === 'string' && stripeChargeId
+              ? stripeChargeId
+              : null;
+
+            if (priorChargeId && currentChargeId && priorChargeId !== currentChargeId) {
+              conflictingMatch = { record: occurrence, distance: null };
+              continue;
+            }
+
+            if (!priorChargeId || priorChargeId === currentChargeId) {
+              // If the current attempt is the first one with a canonical
+              // charge and the previous attempt had none, preserve the
+              // current VALID result. All other combinations are repeats.
+              if (priorChargeId || !currentChargeId) {
+                persist();
+                return {
+                  duplicate: true,
+                  matchType: 'TRANSACTION_EVIDENCE',
+                  record: occurrence,
+                  proof: {
+                    transaction_id: currentTransactionId,
+                    evidence_fingerprint: currentFingerprint,
+                    stripe_charge_id: priorChargeId || currentChargeId || null,
+                  },
+                };
+              }
+            }
+          }
+        }
+      }
+
       if (
         typeof phash === 'string'
         && currentFingerprint
         && (
           (typeof stripeChargeId === 'string' && stripeChargeId)
-          || storedTransactionId(currentEvidence?.transaction_id)
+          || currentTransactionId
+          || currentCustomerName
         )
       ) {
         for (const [otherSha256, record] of Object.entries(state.images)) {
           if (otherSha256 === sha256 || record.status !== 'COMPLETED') continue;
           for (const occurrence of imageOccurrences(record)) {
-            if (occurrence.evidence_fingerprint !== currentFingerprint) continue;
+            if (![
+              currentFingerprint,
+              currentEvidence?.legacy_evidence_fingerprint,
+            ].includes(occurrence.evidence_fingerprint)) continue;
             const distance = hammingDistance(phash, occurrence.phash);
             if (distance !== null && distance <= phashMaxDistance) {
               // Visual similarity is duplicate proof only when both images
@@ -304,19 +388,25 @@ function createDuplicateStore({
               const sameTransactionId = storedTransactionId(occurrence.transaction_id)
                 && storedTransactionId(currentEvidence?.transaction_id)
                 && storedTransactionId(occurrence.transaction_id) === storedTransactionId(currentEvidence.transaction_id);
+              const sameCustomerReceipt = !currentTransactionId
+                && storedCustomerName(occurrence.customer_name)
+                && currentCustomerName
+                && storedCustomerName(occurrence.customer_name) === currentCustomerName;
+              const samePaymentEvidence = sameTransactionId || sameCustomerReceipt;
               if (
-                sameTransactionId
+                samePaymentEvidence
                 && !occurrence.stripe_charge_id
                 && !stripeChargeId
               ) {
                 persist();
                 return {
                   duplicate: true,
-                  matchType: 'PHASH_TRANSACTION_ID',
+                  matchType: sameTransactionId ? 'PHASH_TRANSACTION_ID' : 'PHASH_RECEIPT_EVIDENCE',
                   record: occurrence,
                   distance,
                   proof: {
                     transaction_id: storedTransactionId(currentEvidence.transaction_id),
+                    customer_name: currentCustomerName,
                     evidence_fingerprint: currentFingerprint,
                   },
                 };
