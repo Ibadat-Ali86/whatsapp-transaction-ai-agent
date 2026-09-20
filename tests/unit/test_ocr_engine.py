@@ -134,3 +134,43 @@ def test_ai_cannot_invent_description_when_receipt_text_has_none(monkeypatch):
     assert result.ai_used is True
     assert result.fields is not None
     assert result.fields.description is None
+
+
+def test_ai_enrichment_preserves_deterministic_customer_name(monkeypatch):
+    settings = SimpleNamespace(
+        AI_PROVIDER="groq",
+        MAX_IMAGE_SIZE_MB=10.0,
+        OCR_CONFIDENCE_THRESHOLD=0.85,
+    )
+    tesseract_result = TesseractResult(
+        raw_text="Cystomer (C <\nVan Pham\nPayment amount $6.77\nCompleted",
+        confidence=0.42,
+        word_count=8,
+        processing_time_ms=10,
+        preprocessing_strategy="basic",
+    )
+
+    class PartialProvider:
+        name = "groq"
+
+        def extract_payment_fields(self, _image_bytes, _processing_id):
+            return AIExtractionResult(
+                provider_name="groq",
+                raw_text='{"amount":"$6.77","customer_name":null}',
+                fields={"amount": "$6.77", "customer_name": None},
+                confidence=1.0,
+                processing_time_ms=20,
+                model_used="unit-test",
+            )
+
+    monkeypatch.setattr(engine, "get_settings", lambda: settings)
+    monkeypatch.setattr(engine, "save_temp_image", lambda *_args: None)
+    monkeypatch.setattr(engine, "delete_temp_image", lambda _path: None)
+    monkeypatch.setattr(engine.TesseractProcessor, "extract", lambda *_args: tesseract_result)
+    monkeypatch.setattr(engine, "get_provider", lambda _name: PartialProvider())
+
+    result = OCREngine.process_image(b"\xff\xd8\xffsynthetic", "wa-test-customer-name", "image/jpeg")
+
+    assert result.error is None
+    assert result.fields is not None
+    assert result.fields.customer_name == "Van Pham"

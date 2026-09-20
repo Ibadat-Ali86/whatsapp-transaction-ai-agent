@@ -120,6 +120,11 @@ MATCHED/NO_MATCH/AMBIGUOUS/ERROR.
 stripe_reason_code
 Stable safe reason for the Stripe result.
 
+TIMEZONE_BOUNDARY_SINGLE_MATCH
+One eligible charge matched the amount, receipt minute, payment status/method,
+and strong identity evidence within the bounded receipt/account timezone
+window. This is not a recency-only or amount-only approval.
+
 matched_transaction
 Canonical amount, local date/time, customer name, description, status, and
 payment method returned only for one eligible Stripe match.

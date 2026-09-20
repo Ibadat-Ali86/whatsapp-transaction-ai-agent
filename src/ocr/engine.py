@@ -79,6 +79,17 @@ class OCREngine:
                 ai_result = provider.extract_payment_fields(image_bytes, processing_id)
                 
                 ai_fields = FieldExtractor.extract_from_ai_response(ai_result.fields, processing_id)
+                # Cloud OCR is enrichment, not the only source of receipt
+                # evidence. Preserve deterministic local fields when the
+                # provider omits one, especially the customer name used for
+                # safe Stripe disambiguation.
+                for field_name in (
+                    'email', 'transaction_id', 'amount_cents', 'minutes',
+                    'payment_hour', 'payment_date', 'payment_month',
+                    'payment_day', 'customer_name', 'status',
+                ):
+                    if getattr(ai_fields, field_name) is None:
+                        setattr(ai_fields, field_name, getattr(fields, field_name))
                 # Description is not present on the current receipt format.
                 # Do not let a vision model invent one and use it as a hard
                 # Stripe filter. If a future receipt explicitly exposes a

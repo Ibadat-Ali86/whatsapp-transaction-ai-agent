@@ -90,9 +90,11 @@ STRIPE_TIMEZONE=America/Chicago
 # Optional timezone printed by payment receipts, e.g. America/Chicago. Set this
 # when receipt clocks use the same timezone as the Stripe account. It allows
 # hour+minute matching. If an exact hour window returns no match, the verifier
-# performs one bounded same-day recovery pass that relaxes only the hour and
-# still requires amount/date/minute/status/currency/payment-method agreement
-# with exactly one eligible Stripe charge. Leave empty for mixed receipt zones.
+# performs bounded recovery that can cross a date boundary, but still requires
+# amount, exact receipt minute, status, currency, payment method, and one
+# strong identity/name/description constraint. It approves only one eligible
+# charge (or one fresh charge after previously claimed IDs are removed). Leave
+# empty for mixed receipt zones.
 STRIPE_SCREENSHOT_TIMEZONE=
 # A receipt saying "Today" is resolved from the WhatsApp receive timestamp in
 # STRIPE_TIMEZONE by the n8n evidence-preparation node. This avoids scanning

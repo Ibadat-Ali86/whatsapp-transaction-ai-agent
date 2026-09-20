@@ -76,6 +76,20 @@ class TestTransactionIdExtraction:
         fields = FieldExtractor.extract_from_text(text, "test-pid-005")
         assert fields.email == "john123@domain456.com"
 
+    def test_extracts_customer_name_when_ocr_misreads_customer_label(self):
+        fields = FieldExtractor.extract_from_text(
+            "Cystomer (C <\nVan Pham\nPayment source\nCash balance",
+            "test-pid-customer-name",
+        )
+        assert fields.customer_name == "Van Pham"
+
+    def test_does_not_promote_payment_labels_to_customer_name(self):
+        fields = FieldExtractor.extract_from_text(
+            "Customer\nPayment date\nSat, Sep 19\nPayment source\nCash balance",
+            "test-pid-customer-label-only",
+        )
+        assert fields.customer_name is None
+
 
 # ===========================================================================
 # Amount extraction — MONEY-AS-CENTS INVARIANT

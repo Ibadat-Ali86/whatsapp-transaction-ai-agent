@@ -37,6 +37,14 @@ unresolved, the current attempt may become the one valid claim. `DUPLICATE` is
 a non-approving verdict and includes the first processing ID for audit
 correlation.
 
+For receipt clocks that differ from the Stripe account timezone, the verifier
+uses a bounded timezone-boundary recovery path. It may cross the displayed
+receipt date by at most the real-world timezone range plus a small timestamp
+margin, but it retains the exact amount, receipt minute, succeeded Cash App
+status, and a strong identity constraint. A captionless receipt must provide an
+exact customer name, description, or provider identifier for this path; two or
+more eligible candidates remain `UNCLEAR`.
+
 The WhatsApp adapter reacts with `✅` only for a clear valid Stripe match and
 uses `❌` for invalid, errored, or unresolved results. Non-valid results also
 include a concise justification when bot replies are enabled; unresolved

@@ -369,6 +369,92 @@ async def test_known_receipt_timezone_offset_falls_back_to_same_day_and_minute()
 
 
 @pytest.mark.asyncio
+async def test_unknown_receipt_timezone_recovers_unique_adjacent_day_match_with_customer_name():
+    charge_created = int(datetime(2026, 9, 20, 1, 43, tzinfo=timezone.utc).timestamp())
+
+    def responses(request):
+        assert request.url.path == "/v1/charges/search"
+        query = request.url.params["query"]
+        assert "amount:677" in query
+        assert "created>" in query
+        assert "created<" in query
+        return httpx.Response(200, json={
+            "data": [charge(
+                "ch_677_timezone_boundary",
+                amount=677,
+                created=charge_created,
+                customer=None,
+                receipt_email=None,
+                billing_details={"name": "Van Pham"},
+            )],
+            "has_more": False,
+        })
+
+    result, _ = await verify_with_responses(
+        responses,
+        timezone_name="UTC",
+        evidence_value=PaymentEvidence(
+            email=None,
+            amount_cents=677,
+            payment_date=datetime(2026, 9, 19, tzinfo=timezone.utc).date(),
+            minutes=43,
+            payment_hour=23,
+            customer_name="van pham",
+        ),
+    )
+
+    assert result.status == "MATCHED"
+    assert result.verdict == "VALID"
+    assert result.reason_code == "TIMEZONE_BOUNDARY_SINGLE_MATCH"
+    assert result.stripe_charge_id == "ch_677_timezone_boundary"
+
+
+@pytest.mark.asyncio
+async def test_unknown_receipt_timezone_keeps_adjacent_day_tie_unclear():
+    def responses(request):
+        assert request.url.path == "/v1/charges/search"
+        return httpx.Response(200, json={
+            "data": [
+                charge(
+                    "ch_677_boundary_one",
+                    amount=677,
+                    created=int(datetime(2026, 9, 20, 1, 43, tzinfo=timezone.utc).timestamp()),
+                    customer=None,
+                    receipt_email=None,
+                    billing_details={"name": "Van Pham"},
+                ),
+                charge(
+                    "ch_677_boundary_two",
+                    amount=677,
+                    created=int(datetime(2026, 9, 20, 3, 43, tzinfo=timezone.utc).timestamp()),
+                    customer=None,
+                    receipt_email=None,
+                    billing_details={"name": "Van Pham"},
+                ),
+            ],
+            "has_more": False,
+        })
+
+    result, _ = await verify_with_responses(
+        responses,
+        timezone_name="UTC",
+        evidence_value=PaymentEvidence(
+            email=None,
+            amount_cents=677,
+            payment_date=datetime(2026, 9, 19, tzinfo=timezone.utc).date(),
+            minutes=43,
+            payment_hour=23,
+            customer_name="Van Pham",
+        ),
+    )
+
+    assert result.status == "AMBIGUOUS"
+    assert result.verdict == "UNCLEAR"
+    assert result.reason_code == "MULTIPLE_EXACT_MATCHES"
+    assert result.candidate_count == 2
+
+
+@pytest.mark.asyncio
 async def test_wrong_caption_can_recover_only_one_charge_from_two_ocr_constraints():
     def responses(request):
         if request.url.path == "/v1/customers":

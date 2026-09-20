@@ -42,6 +42,10 @@ TRANSACTION_METADATA_KEYS = {
     "external_transaction_id",
     "receipt_id",
 }
+# The largest real-world timezone difference is 26 hours. Add a small margin
+# for provider timestamp jitter, but keep this bounded: this is not a generic
+# lookback and it never selects a candidate by recency alone.
+RECEIPT_TIMEZONE_WINDOW_SECONDS = 26 * 60 * 60 + 5 * 60
 
 
 @dataclass(frozen=True)
@@ -825,6 +829,9 @@ class StripeVerifier:
             normalized_description = None
             if evidence.description is not None and evidence.description.strip():
                 normalized_description = normalize_description(evidence.description)
+            normalized_customer_name = None
+            if evidence.customer_name is not None and evidence.customer_name.strip():
+                normalized_customer_name = normalize_customer_name(evidence.customer_name)
             normalized_excluded_charge_ids: list[str] = []
             for charge_id in evidence.excluded_stripe_charge_ids:
                 if charge_id is None or not str(charge_id).strip():
@@ -841,6 +848,7 @@ class StripeVerifier:
                 email_candidates=tuple(normalized_email_candidates),
                 transaction_id=normalized_transaction_id,
                 description=normalized_description,
+                customer_name=normalized_customer_name,
                 excluded_stripe_charge_ids=tuple(normalized_excluded_charge_ids),
                 currency=evidence.currency.casefold(),
                 payment_method_type=evidence.payment_method_type.casefold(),
@@ -905,6 +913,23 @@ class StripeVerifier:
                 # the local matcher below still requires the exact minute.
                 search_lower_timestamp = int(minute_start.timestamp()) - 60
                 search_upper_timestamp = int(minute_start.timestamp()) + 120
+            elif (
+                evidence.payment_date is not None
+                and evidence.payment_hour is not None
+                and evidence.minutes is not None
+            ):
+                # Receipt clocks may be from a different timezone than the
+                # Stripe account. Keep the initial amount search bounded to
+                # the receipt day plus the maximum timezone boundary instead
+                # of scanning a 90-day amount ledger.
+                search_lower_timestamp = max(0, start_timestamp - RECEIPT_TIMEZONE_WINDOW_SECONDS)
+                search_upper_timestamp = end_timestamp + RECEIPT_TIMEZONE_WINDOW_SECONDS
+            bounded_day_lower_timestamp = (
+                start_timestamp if screenshot_zone is not None else search_lower_timestamp
+            )
+            bounded_day_upper_timestamp = (
+                end_timestamp if screenshot_zone is not None else (search_upper_timestamp or end_timestamp)
+            )
         except (StripeVerificationError, TypeError, ValueError) as exc:
             reason_code = exc.reason_code if isinstance(exc, StripeVerificationError) else str(exc)
             result = StripeVerificationResult(processing_id, "ERROR", "ERROR", reason_code, email_hash=email_hash)
@@ -953,7 +978,11 @@ class StripeVerifier:
                     if exc.reason_code != "STRIPE_API_ERROR":
                         raise
                     charges = (
-                        await self._charges_for_day(client, start_timestamp, end_timestamp)
+                        await self._charges_for_day(
+                            client,
+                            bounded_day_lower_timestamp,
+                            bounded_day_upper_timestamp,
+                        )
                         if evidence.payment_date is not None
                         else await self._charges_for_lookback(client)
                     )
@@ -965,7 +994,11 @@ class StripeVerifier:
                     # still authoritative and an empty/limited list never
                     # becomes an approval.
                     charges = (
-                        await self._charges_for_day(client, start_timestamp, end_timestamp)
+                        await self._charges_for_day(
+                            client,
+                            bounded_day_lower_timestamp,
+                            bounded_day_upper_timestamp,
+                        )
                         if evidence.payment_date is not None
                         else await self._charges_for_lookback(client)
                     )
@@ -1029,6 +1062,64 @@ class StripeVerifier:
                         return named_matches
                 return selected
 
+            def timezone_boundary_matches_for(
+                candidate_charges: list[dict[str, Any]],
+            ) -> list[dict[str, Any]]:
+                """Find one bounded cross-timezone match without guessing."""
+                if (
+                    evidence.payment_date is None
+                    or evidence.payment_hour is None
+                    or evidence.minutes is None
+                    or evidence.amount_cents is None
+                ):
+                    return []
+                if not (
+                    identity_emails
+                    or evidence.customer_name
+                    or evidence.transaction_id
+                    or evidence.description
+                ):
+                    return []
+
+                expected_created = datetime.combine(
+                    evidence.payment_date,
+                    time(evidence.payment_hour, evidence.minutes),
+                    tzinfo=match_zone,
+                )
+                boundary_matches: list[dict[str, Any]] = []
+                for charge in candidate_charges:
+                    if not self._matches(
+                        charge,
+                        evidence,
+                        customer_ids,
+                        match_zone,
+                        require_identity=bool(evidence.email),
+                        include_time_constraints=False,
+                    ):
+                        continue
+                    local_created = _charge_local_datetime(charge, match_zone)
+                    if local_created is None or local_created.minute != evidence.minutes:
+                        continue
+                    delta_seconds = abs((local_created - expected_created).total_seconds())
+                    if delta_seconds > RECEIPT_TIMEZONE_WINDOW_SECONDS:
+                        continue
+
+                    # Without an email or provider identifier, the receipt
+                    # name is the independent identity constraint. Do not
+                    # approve a same-amount/same-minute payment on those
+                    # fields alone.
+                    if (
+                        not identity_emails
+                        and not evidence.transaction_id
+                        and not evidence.description
+                        and not self._customer_name_matches(charge, evidence)
+                    ):
+                        continue
+                    boundary_matches.append(charge)
+                return boundary_matches
+
+            timezone_boundary_match = False
+
             matches = matches_for(
                 charges,
                 # Apply every trustworthy receipt constraint before deciding
@@ -1044,14 +1135,17 @@ class StripeVerifier:
                 match_minute=False,
             )
             matches = prefer_one_fresh_candidate(matches)
+            if not matches:
+                boundary_matches = prefer_one_fresh_candidate(timezone_boundary_matches_for(charges))
+                if boundary_matches:
+                    matches = boundary_matches
+                    timezone_boundary_match = len(boundary_matches) == 1
 
             # A receipt clock can differ from the Stripe account clock even
             # when the account dashboard is configured for US Central. If the
-            # precise minute query produced no eligible match, widen only to
-            # the same receipt date, then require the exact minute without
-            # requiring the potentially shifted hour. This remains safe:
-            # amount, date, minute, status, currency, and payment method must
-            # still identify one eligible charge.
+            # precise query produced no eligible match, retry the bounded
+            # timezone-expanded window and retain exact local evidence before
+            # considering the broader fallback.
             if (
                 not matches
                 and not customer_ids
@@ -1061,8 +1155,8 @@ class StripeVerifier:
             ):
                 day_query = self._charge_search_query(
                     evidence,
-                    lower_timestamp=start_timestamp,
-                    upper_timestamp=end_timestamp,
+                    lower_timestamp=bounded_day_lower_timestamp,
+                    upper_timestamp=bounded_day_upper_timestamp,
                 )
                 if day_query is not None:
                     try:
@@ -1070,7 +1164,11 @@ class StripeVerifier:
                     except StripeVerificationError as exc:
                         if exc.reason_code != "STRIPE_API_ERROR":
                             raise
-                        day_charges = await self._charges_for_day(client, start_timestamp, end_timestamp)
+                        day_charges = await self._charges_for_day(
+                            client,
+                            bounded_day_lower_timestamp,
+                            bounded_day_upper_timestamp,
+                        )
                     if day_charges:
                         charges = day_charges
                         matches = matches_for(
@@ -1087,6 +1185,11 @@ class StripeVerifier:
                                 match_minute=False,
                             )
                         matches = prefer_one_fresh_candidate(matches)
+                        if not matches:
+                            boundary_matches = prefer_one_fresh_candidate(timezone_boundary_matches_for(charges))
+                            if boundary_matches:
+                                matches = boundary_matches
+                                timezone_boundary_match = len(boundary_matches) == 1
 
             # Email identity plus the Stripe payment attributes is a safe
             # fallback when a receipt minute was OCR'd incorrectly or belongs
@@ -1178,6 +1281,11 @@ class StripeVerifier:
                         match_minute=False,
                     )
                     matches = prefer_one_fresh_candidate(matches)
+                    if not matches:
+                        boundary_matches = prefer_one_fresh_candidate(timezone_boundary_matches_for(charges))
+                        if boundary_matches:
+                            matches = boundary_matches
+                            timezone_boundary_match = len(boundary_matches) == 1
                     if not matches and identity_emails:
                         matches = matches_for(
                             charges,
@@ -1319,7 +1427,7 @@ class StripeVerifier:
                     processing_id,
                     "MATCHED",
                     "VALID",
-                    "TRANSACTION_ID_MATCH" if transaction_id_match else "IDENTITY_RECOVERED_FROM_STRIPE" if recovered_identity else "EXACT_SINGLE_MATCH" if has_ocr_constraints else "EMAIL_SINGLE_MATCH",
+                    "TRANSACTION_ID_MATCH" if transaction_id_match else "TIMEZONE_BOUNDARY_SINGLE_MATCH" if timezone_boundary_match else "IDENTITY_RECOVERED_FROM_STRIPE" if recovered_identity else "EXACT_SINGLE_MATCH" if has_ocr_constraints else "EMAIL_SINGLE_MATCH",
                     stripe_charge_id=matches[0].get("id"),
                     candidate_count=1,
                     email_hash=email_hash,

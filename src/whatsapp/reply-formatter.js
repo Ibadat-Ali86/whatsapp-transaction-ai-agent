@@ -98,6 +98,7 @@ function formatVerificationFailureReply(ocrResult, processingId) {
     MULTIPLE_EXACT_MATCHES: 'Stripe returned multiple eligible payments, so the payment could not be uniquely confirmed.',
     MULTIPLE_IDENTITY_RECOVERY_MATCHES: 'Stripe returned multiple possible payments, so the payment could not be uniquely confirmed.',
     MULTIPLE_TRANSACTION_ID_MATCHES: 'The payment identifier matched multiple Stripe records, so no payment was approved.',
+    TIMEZONE_BOUNDARY_SINGLE_MATCH: 'Stripe uniquely matched the amount, receipt minute, eligible Cash App payment, and strong identity evidence across a bounded timezone boundary.',
     STRIPE_PAGINATION_LIMIT: 'Stripe search reached its safety limit before a unique payment could be confirmed.',
     STRIPE_DISABLED: 'Stripe verification is disabled for this bot instance.',
     STRIPE_LOOKUP_PENDING: 'Stripe verification did not return a completed result.',

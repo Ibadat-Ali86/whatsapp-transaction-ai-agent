@@ -20,6 +20,41 @@ class ExtractedFields:
 
 class FieldExtractor:
     @staticmethod
+    def _valid_customer_name(value: str) -> Optional[str]:
+        candidate = re.sub(r'\s+', ' ', value).strip(' :#=-()<>|')
+        if not candidate or len(candidate) > 256 or re.search(r'\d|@|\$|https?://', candidate):
+            return None
+        if candidate.casefold() in {
+            'payment amount', 'payment date', 'payment source', 'payment identifier',
+            'completed', 'cash app', 'cash app pay', 'purchase from aq digital llc',
+        }:
+            return None
+        words = candidate.split(' ')
+        if len(words) < 2 or not all(re.search(r'[A-Za-z]', word) for word in words):
+            return None
+        return candidate
+
+    @staticmethod
+    def _labeled_customer_name(raw_text: str) -> Optional[str]:
+        """Extract a name beside a Customer label, including common OCR typos."""
+        lines = raw_text.splitlines()
+        label_pattern = re.compile(r'\b(?:customer|cystomer|customor|cust0mer)\b', re.IGNORECASE)
+        for index, line in enumerate(lines):
+            label_match = label_pattern.search(line)
+            if not label_match:
+                continue
+            inline = FieldExtractor._valid_customer_name(line[label_match.end():])
+            if inline:
+                return inline
+            for offset in (1, 2):
+                if index + offset >= len(lines):
+                    break
+                candidate = FieldExtractor._valid_customer_name(lines[index + offset])
+                if candidate:
+                    return candidate
+        return None
+
+    @staticmethod
     def _labeled_transaction_id(raw_text: str) -> Optional[str]:
         """Extract a provider reference next to its explicit receipt label.
 
@@ -162,6 +197,8 @@ class FieldExtractor:
             if re.search(rf'\b{keyword}\b', raw_text, re.IGNORECASE):
                 fields.status = keyword
                 break
+
+        fields.customer_name = FieldExtractor._labeled_customer_name(raw_text)
                 
         return fields
 
