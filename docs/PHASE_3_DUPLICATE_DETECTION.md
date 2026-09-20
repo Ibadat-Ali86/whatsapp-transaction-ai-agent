@@ -6,13 +6,13 @@
 WhatsApp message ID duplicate
   -> suppress repeated delivery
 
-new message
-  -> exact image SHA-256 duplicate?
-       -> DUPLICATE, do not run OCR or Stripe again
-  -> OCR + Stripe verification
+  new message
+       -> exact image SHA-256 duplicate?
+            -> DUPLICATE, do not run OCR or Stripe again
+       -> OCR + Stripe verification
   -> same uniquely matched Stripe charge ID?
        -> DUPLICATE transaction
-  -> same pHash + same canonical Stripe charge ID?
+  -> same pHash + same payment identifier?
        -> DUPLICATE recompressed/resized image
   -> otherwise
        -> ORIGINAL / VALID when Stripe is VALID
@@ -21,10 +21,13 @@ new message
 `VALID` is never inferred from an image hash. Stripe must return one eligible
 succeeded charge. A pHash near-match is not sufficient by itself: email,
 amount, and receipt time are not unique when a customer makes multiple
-payments. The near-match path requires the same canonical Stripe charge ID on
-both records; otherwise the new screenshot continues through independent
-verification. `DUPLICATE` is a non-approving verdict and includes the first
-processing ID for audit correlation.
+payments. The unresolved near-match path requires the same explicit
+payment-specific identifier on both records; the Stripe-resolved path still
+requires the same canonical Stripe charge ID. If the current attempt is the
+first one that resolves a fresh charge while the earlier matching attempt was
+unresolved, the current attempt may become the one valid claim. `DUPLICATE` is
+a non-approving verdict and includes the first processing ID for audit
+correlation.
 
 The WhatsApp adapter reacts with `✅` only for a clear valid Stripe match and
 uses `❌` for invalid, errored, or unresolved results. Non-valid results also
@@ -45,8 +48,9 @@ intentional re-review.
 
 ## Stored metadata
 
-The local store contains SHA-256, pHash, one-way caption-email hash, amount,
-processing ID, group hash, a sanitized group-name snapshot, and timestamps.
+The local store contains SHA-256, pHash, payment-specific identifier when
+available, one-way caption-email hash, amount, processing ID, group hash, a
+sanitized group-name snapshot, and timestamps.
 It does not contain raw images, Stripe secrets, or complete email addresses.
 Records expire according to `DUPLICATE_RETENTION_DAYS`.
 
@@ -62,6 +66,9 @@ transactional store with a unique constraint on SHA-256 and Stripe charge ID.
 - exact SHA-256 resend across two groups;
 - persisted exact hash after recreating the store;
 - pHash near-match with the same canonical Stripe charge ID;
+- pHash near-match with the same payment identifier when both Stripe lookups
+  are unresolved;
+- exact image resend after an unresolved first attempt remains non-approving;
 - same-looking receipts with different Stripe charge IDs remain independent;
 - repeated Stripe charge with different image bytes;
 - unrelated images do not become duplicates;

@@ -185,6 +185,40 @@ test('requires payment-specific evidence before using pHash', () => {
   assert.equal(result.duplicate, false);
 });
 
+test('detects recompressed repeats from a payment identifier when Stripe has not resolved either attempt', () => {
+  const store = createDuplicateStore({ filePath: temporaryPath(), phashMaxDistance: 6 });
+  const firstSha = '5'.repeat(64);
+  const secondSha = '6'.repeat(64);
+  const sharedEvidence = {
+    captionEmail: 'customer@example.com',
+    amountCents: 500,
+    transactionId: 'TJ2WHT1Z0',
+    paymentDate: '2026-09-18',
+    paymentHour: 22,
+    minutes: 56,
+  };
+  store.claimImage({ sha256: firstSha, processingId: 'wa-first', groupIdHash: 'group-a' });
+  store.registerImageEvidence({
+    sha256: firstSha,
+    phash: '0000000000000000',
+    verificationVerdict: 'UNCLEAR',
+    ...sharedEvidence,
+    processingId: 'wa-first',
+  });
+  store.claimImage({ sha256: secondSha, processingId: 'wa-second', groupIdHash: 'group-b' });
+  const result = store.registerImageEvidence({
+    sha256: secondSha,
+    phash: '0000000000000001',
+    verificationVerdict: 'UNCLEAR',
+    ...sharedEvidence,
+    processingId: 'wa-second',
+  });
+  assert.equal(result.duplicate, true);
+  assert.equal(result.matchType, 'PHASH_TRANSACTION_ID');
+  assert.equal(result.record.processing_id, 'wa-first');
+  assert.equal(result.proof.transaction_id, 'tj2wht1z0');
+});
+
 test('returns recent claimed Stripe charge IDs for multi-match recovery', () => {
   const store = createDuplicateStore({ filePath: temporaryPath() });
   store.claimTransaction('stripe:ch_old', { processingId: 'wa-old', groupIdHash: 'group-a' });

@@ -20,6 +20,43 @@ class ExtractedFields:
 
 class FieldExtractor:
     @staticmethod
+    def _labeled_transaction_id(raw_text: str) -> Optional[str]:
+        """Extract a provider reference next to its explicit receipt label.
+
+        Mobile receipt OCR is not layout-stable: Tesseract can emit the value
+        before the label even when the image shows label -> value. Restrict
+        extraction to the nearest non-empty line on either side of the label
+        so arbitrary merchant text is never promoted to a payment ID.
+        """
+        label_pattern = re.compile(
+            r'\b(?:payment\s+(?:identifier|id)|transaction\s+(?:identifier|id))\b',
+            re.IGNORECASE,
+        )
+        token_pattern = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_-]{3,127}$')
+
+        for label_match in label_pattern.finditer(raw_text):
+            inline = re.search(
+                r'\s*[:#=-]\s*([A-Za-z0-9][A-Za-z0-9_-]{3,127})',
+                raw_text[label_match.end():label_match.end() + 140],
+            )
+            if inline:
+                return inline.group(1)
+
+            lines = raw_text.splitlines()
+            label_line = raw_text.count('\n', 0, label_match.start())
+            nearby_lines = []
+            for offset in (1, -1, 2, -2):
+                index = label_line + offset
+                if 0 <= index < len(lines):
+                    candidate = lines[index].strip().strip(':#=-')
+                    if candidate:
+                        nearby_lines.append(candidate)
+            for candidate in nearby_lines:
+                if token_pattern.fullmatch(candidate) and any(char.isdigit() for char in candidate):
+                    return candidate
+        return None
+
+    @staticmethod
     def _bounded_int(value, minimum: int, maximum: int) -> Optional[int]:
         if isinstance(value, bool) or value is None:
             return None
@@ -42,14 +79,7 @@ class FieldExtractor:
         # "Payment identifier". Only read an identifier next to an explicit
         # payment/transaction label; never treat an arbitrary OCR token as a
         # transaction ID.
-        transaction_match = re.search(
-            r'\b(?:payment\s+(?:identifier|id)|transaction\s+(?:identifier|id))\b'
-            r'\s*[:#=-]?\s*([A-Za-z0-9][A-Za-z0-9_-]{3,127})',
-            raw_text,
-            re.IGNORECASE,
-        )
-        if transaction_match:
-            fields.transaction_id = transaction_match.group(1)
+        fields.transaction_id = FieldExtractor._labeled_transaction_id(raw_text)
 
         # Only capture a description when the receipt/OCR explicitly labels
         # it. Merchant names and free-form surrounding text are not treated as

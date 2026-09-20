@@ -42,7 +42,20 @@ class TesseractProcessor:
             r"\b(?:19|20)\d{2}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])\b",
             r"\b(?:completed|success|paid|failed|pending|declined)\b",
         )
-        return sum(bool(re.search(pattern, raw_text, re.IGNORECASE)) for pattern in patterns)
+        quality = sum(bool(re.search(pattern, raw_text, re.IGNORECASE)) for pattern in patterns)
+        if re.search(r'\bpayment\s+(?:identifier|id)|\btransaction\s+(?:identifier|id)', raw_text, re.IGNORECASE):
+            quality += 1
+        # Prefer OCR variants that contain a token adjacent to the explicit
+        # payment-identifier label. This catches receipts where OCR reverses
+        # the visual label/value order and preserves the strongest lookup hint.
+        if re.search(
+            r'(?:payment\s+(?:identifier|id)|transaction\s+(?:identifier|id))\s*\n?\s*[A-Za-z0-9][A-Za-z0-9_-]{3,127}'
+            r'|[A-Za-z0-9][A-Za-z0-9_-]{3,127}\s*\n?\s*(?:payment\s+(?:identifier|id)|transaction\s+(?:identifier|id))',
+            raw_text,
+            re.IGNORECASE,
+        ):
+            quality += 1
+        return quality
 
     def extract(self, image_bytes: bytes, processing_id: str) -> TesseractResult:
         settings = get_settings()
@@ -65,26 +78,41 @@ class TesseractProcessor:
         for strategy in strategies_to_try:
             processed_image = ImagePreprocessor.preprocess(image, strategy)
             try:
-                # Get raw text
-                raw_text = pytesseract.image_to_string(processed_image)
-                # Get data for confidence
-                data = pytesseract.image_to_data(processed_image, output_type=pytesseract.Output.DICT)
-                
-                confidences = [int(c) for c in data['conf'] if c != '-1']
-                confidence = sum(confidences) / len(confidences) / 100.0 if confidences else 0.0
-                word_count = len(confidences)
+                def run_variant(config=''):
+                    raw_text = pytesseract.image_to_string(processed_image, config=config)
+                    data = pytesseract.image_to_data(
+                        processed_image,
+                        config=config,
+                        output_type=pytesseract.Output.DICT,
+                    )
+                    confidences = [int(c) for c in data['conf'] if c != '-1']
+                    confidence = sum(confidences) / len(confidences) / 100.0 if confidences else 0.0
+                    return TesseractResult(
+                        raw_text=raw_text,
+                        confidence=confidence,
+                        word_count=len(confidences),
+                        processing_time_ms=int((time.time() - start_time) * 1000),
+                        preprocessing_strategy=strategy.name,
+                    )
 
-                duration_ms = int((time.time() - start_time) * 1000)
-                
-                result = TesseractResult(
-                    raw_text=raw_text,
-                    confidence=confidence,
-                    word_count=word_count,
-                    processing_time_ms=duration_ms,
-                    preprocessing_strategy=strategy.name
-                )
+                result = run_variant()
+                quality = self._field_quality(result.raw_text)
 
-                quality = self._field_quality(raw_text)
+                # Sparse receipt layouts often put the payment identifier on
+                # the line before its label. Run one bounded alternate layout
+                # pass when the normal pass is not fully receipt-shaped, then
+                # retain whichever output exposes more payment fields. This
+                # improves identifier recovery without sending every image to
+                # the cloud model.
+                if quality < 5:
+                    alternate = run_variant('--psm 11')
+                    alternate_quality = self._field_quality(alternate.raw_text)
+                    if alternate_quality > quality or (
+                        alternate_quality == quality and alternate.confidence > result.confidence
+                    ):
+                        result = alternate
+                        quality = alternate_quality
+
                 if (
                     best_result is None
                     or quality > best_quality

@@ -197,13 +197,18 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
         message,
         captionEmail: job.caption_email,
       });
-      // A previously approved exact image is a terminal duplicate. This check
-      // must happen before Stripe's "one fresh candidate" recovery rule can
-      // reinterpret the same already-approved receipt as a new payment.
+      // A previously processed exact image is not a new submission. A prior
+      // Stripe charge is included when available; otherwise the SHA-256 is
+      // still deterministic proof that the same bytes were submitted. Do not
+      // approve the same exact screenshot twice while a prior attempt is
+      // unresolved.
       const confirmedImageChargeIds = Array.isArray(imageClaim.confirmed_stripe_charge_ids)
         ? imageClaim.confirmed_stripe_charge_ids
         : [];
-      if (imageClaim.duplicate && confirmedImageChargeIds.length > 0) {
+      if (imageClaim.duplicate) {
+        const reasonCode = confirmedImageChargeIds.length > 0
+          ? 'DUPLICATE_IMAGE_SHA256_CONFIRMED'
+          : 'DUPLICATE_IMAGE_SHA256_UNVERIFIED';
         const duplicateResult = {
           provider: 'duplicate-detector',
           confidence: 1,
@@ -211,12 +216,13 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
           verification: {
             status: 'DUPLICATE',
             verdict: 'DUPLICATE',
-            reason_code: 'DUPLICATE_IMAGE_SHA256_CONFIRMED',
+            reason_code: reasonCode,
             duplicate_of_processing_id: imageClaim.record.processing_id,
             duplicate_scope: duplicateScope(imageClaim.record, groupId),
             duplicate_group_name: imageClaim.record.group_name,
             stripe_charge_id: confirmedImageChargeIds[0],
             confirmed_stripe_charge_ids: confirmedImageChargeIds,
+            duplicate_proof: imageClaim.proof || null,
           },
         };
         if (config.BOT_REPLY_ENABLED) {
@@ -233,7 +239,7 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
           duration_ms: Date.now() - startTime,
           verdict: 'DUPLICATE',
           verification_status: 'DUPLICATE',
-          verification_reason: 'DUPLICATE_IMAGE_SHA256_CONFIRMED',
+          verification_reason: reasonCode,
           stripe_charge_id: confirmedImageChargeIds[0],
         }, 'Previously approved exact screenshot rejected as duplicate');
         return { status: 'COMPLETED', verdict: 'DUPLICATE', processing_id: job.processing_id };
@@ -318,6 +324,10 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
             duplicate_of_processing_id: imageEvidence.record.processing_id,
             duplicate_scope: duplicateScope(imageEvidence.record, groupId),
             duplicate_group_name: imageEvidence.record.group_name,
+            duplicate_proof: imageEvidence.proof || {
+              transaction_id: imageEvidence.record.transaction_id || null,
+              evidence_fingerprint: imageEvidence.record.evidence_fingerprint || null,
+            },
           },
         };
         duplicateRecord = imageEvidence.record;
@@ -346,9 +356,10 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
         }
       }
 
-      // Seeing the same image bytes is not enough to call a payment duplicate.
-      // Expose the candidate in a review response when Stripe did not prove
-      // that the canonical charge was reused.
+      // This is only reached for a legacy/in-progress record that could not
+      // be terminally handled above. Preserve provenance in the response, but
+      // do not turn a same-image candidate into an approval without stronger
+      // evidence.
       if (imageClaim.duplicate && finalResult?.verification?.verdict !== 'DUPLICATE') {
         finalResult = {
           ...finalResult,

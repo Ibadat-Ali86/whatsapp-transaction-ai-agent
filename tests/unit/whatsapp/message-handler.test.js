@@ -468,6 +468,39 @@ test('does not re-approve an identical image after its first Stripe payment is v
   assert.equal(sent.filter(event => event.content?.react?.text === '✅').length, 2);
 });
 
+test('marks an exact repeat as duplicate even when the first Stripe lookup was unresolved', async () => {
+  const sent = [];
+  let ocrCalls = 0;
+  const store = duplicateStore();
+  const groupId = '1234567890-1234567890@g.us';
+  const handler = createMessageHandler({
+    sendMessage: async (jid, content, options) => sent.push({ jid, content, options }),
+  }, {
+    ALLOWED_GROUP_JIDS: [groupId],
+    BOT_REPLY_ENABLED: true,
+    BOT_REACTIONS_ENABLED: true,
+    N8N_ENABLED: false,
+  }, logger, {
+    duplicateStore: store,
+    downloadImage: async () => ({ imageBytes: Buffer.from('same-unresolved-image'), mimeType: 'image/png', tempPath: null }),
+    processImageOCR: async () => {
+      ocrCalls += 1;
+      return {
+        fields: { amount_cents: 500, transaction_id: 'TJ2WHT1Z0' },
+        verification: { verdict: 'UNCLEAR', reason_code: 'NO_EXACT_MATCH', candidate_count: 0 },
+      };
+    },
+  });
+
+  await handler({ messages: [captionedImageMessage(groupId, 'unresolved-first')] });
+  await handler({ messages: [captionedImageMessage(groupId, 'unresolved-second')] });
+
+  assert.equal(ocrCalls, 1, 'an exact repeat must not trigger a second lookup after an unresolved attempt');
+  assert.ok(sent.some(event => /DUPLICATE_IMAGE_SHA256_UNVERIFIED/.test(event.content?.text || '')));
+  assert.ok(sent.some(event => /same SHA-256 fingerprint/.test(event.content?.text || '')));
+  assert.ok(sent.some(event => /Original Screenshot Reference/.test(event.content?.text || '')));
+});
+
 test('keeps an approved screenshot protected after 59 later screenshots', async () => {
   const sent = [];
   let verificationCalls = 0;

@@ -131,17 +131,21 @@ The WhatsApp adapter persists duplicate metadata in
 `DUPLICATE_STORE_PATH` (default `data/duplicate-store.json`) and never stores
 the screenshot itself. `DUPLICATE_RETENTION_DAYS` controls metadata retention
 and defaults to 90 days. Exact resends are detected by SHA-256 across all
-allowlisted groups and bot restarts. Recompressed/resized copies are compared
-with pHash only after both receipts resolve to the same canonical Stripe
-charge ID. Email, amount, and displayed time alone are not duplicate proof
-because one customer can make multiple same-amount payments in the same
-minute. A uniquely matched Stripe charge ID is independently claimed so the
-same payment is marked duplicate even when the image changes. An exact
-SHA-256 resend of an image that was already marked `VALID` is a terminal
-duplicate before the fresh-payment fallback runs; it cannot be re-approved as
-a new payment. A visually equivalent image that resolves to a different
-Stripe charge is blocked as `UNCLEAR` for review rather than automatically
-approved.
+allowlisted groups and bot restarts. A repeated exact image is non-approving
+even when the earlier attempt was unresolved; the reply identifies the
+original processing record and says that the original attempt was not
+approved. This prevents a retry of the same bytes from becoming a second
+approval while still preserving the first unresolved record for review.
+Recompressed/resized copies are compared with pHash when the receipt also
+contains the same payment-specific transaction identifier; email, amount, and
+displayed time alone are not duplicate proof because one customer can make
+multiple same-amount payments in the same minute. When Stripe resolves both
+copies, the canonical charge ID remains the strongest proof. If a visually
+equivalent image resolves to a different Stripe charge, it is blocked as
+`UNCLEAR` for review rather than automatically approved. A current attempt
+that is the first one to obtain a fresh Stripe charge remains eligible for
+that single approval; it is not suppressed merely because an earlier attempt
+was unresolved.
 
 Duplicate records retain the first-seen group-name snapshot when WhatsApp
 metadata is available. Duplicate replies include the original processing ID,

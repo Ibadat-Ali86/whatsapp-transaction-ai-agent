@@ -64,6 +64,10 @@ function confirmedStripeChargeIds(record) {
     .filter(chargeId => typeof chargeId === 'string' && chargeId.length > 0))];
 }
 
+function storedTransactionId(value) {
+  return typeof value === 'string' && value.trim() ? value.trim().toLowerCase() : null;
+}
+
 function receiptFingerprint({
   captionEmail,
   amountCents,
@@ -168,6 +172,11 @@ function createDuplicateStore({
           matchType: 'SHA256',
           record: existing,
           confirmed_stripe_charge_ids: confirmedStripeChargeIds(existing),
+          proof: {
+            image_sha256: sha256,
+            transaction_id: storedTransactionId(existing.transaction_id),
+            evidence_fingerprint: existing.evidence_fingerprint || null,
+          },
         };
       }
 
@@ -216,6 +225,12 @@ function createDuplicateStore({
           phash: typeof phash === 'string' ? phash.toLowerCase() : null,
           email_hash: captionEmail ? emailHash(captionEmail) : null,
           amount_cents: Number.isInteger(amountCents) ? amountCents : null,
+          transaction_id: storedTransactionId(transactionId),
+          payment_date: typeof paymentDate === 'string' ? paymentDate : null,
+          payment_month: Number.isInteger(paymentMonth) ? paymentMonth : null,
+          payment_day: Number.isInteger(paymentDay) ? paymentDay : null,
+          payment_hour: Number.isInteger(paymentHour) ? paymentHour : null,
+          minutes: Number.isInteger(minutes) ? minutes : null,
           evidence_fingerprint: receiptFingerprint({
             captionEmail,
             amountCents,
@@ -251,11 +266,17 @@ function createDuplicateStore({
 
       const currentFingerprint = currentEvidence?.evidence_fingerprint;
       let conflictingMatch = null;
-      if (typeof phash === 'string' && currentFingerprint && typeof stripeChargeId === 'string' && stripeChargeId) {
+      if (
+        typeof phash === 'string'
+        && currentFingerprint
+        && (
+          (typeof stripeChargeId === 'string' && stripeChargeId)
+          || storedTransactionId(currentEvidence?.transaction_id)
+        )
+      ) {
         for (const [otherSha256, record] of Object.entries(state.images)) {
           if (otherSha256 === sha256 || record.status !== 'COMPLETED') continue;
           for (const occurrence of imageOccurrences(record)) {
-            if (occurrence.verification_verdict && occurrence.verification_verdict !== 'VALID') continue;
             if (occurrence.evidence_fingerprint !== currentFingerprint) continue;
             const distance = hammingDistance(phash, occurrence.phash);
             if (distance !== null && distance <= phashMaxDistance) {
@@ -271,6 +292,34 @@ function createDuplicateStore({
                 // but block automatic approval so the caller can return an
                 // auditable review.
                 conflictingMatch = { record: occurrence, distance };
+              }
+              // When Stripe was unavailable or OCR did not produce a usable
+              // lookup, an exact payment identifier plus near-identical
+              // receipt image is still deterministic duplicate evidence. Do
+              // not use email/amount/time alone: those fields can repeat for
+              // legitimate payments. If the current attempt has a fresh
+              // canonical charge while the prior attempt does not, let the
+              // current attempt become the first approved claim instead of
+              // suppressing the only successful verification.
+              const sameTransactionId = storedTransactionId(occurrence.transaction_id)
+                && storedTransactionId(currentEvidence?.transaction_id)
+                && storedTransactionId(occurrence.transaction_id) === storedTransactionId(currentEvidence.transaction_id);
+              if (
+                sameTransactionId
+                && !occurrence.stripe_charge_id
+                && !stripeChargeId
+              ) {
+                persist();
+                return {
+                  duplicate: true,
+                  matchType: 'PHASH_TRANSACTION_ID',
+                  record: occurrence,
+                  distance,
+                  proof: {
+                    transaction_id: storedTransactionId(currentEvidence.transaction_id),
+                    evidence_fingerprint: currentFingerprint,
+                  },
+                };
               }
             }
           }

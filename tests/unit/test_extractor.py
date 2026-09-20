@@ -47,6 +47,12 @@ class TestTransactionIdExtraction:
         )
         assert fields.transaction_id == "FQ2JKTVZ0"
 
+    def test_extracts_identifier_when_ocr_reverses_label_and_value_order(self):
+        fields = FieldExtractor.extract_from_text(
+            "TJ2WHT1Z0\nPayment identifier\nCash balance", "test-pid-006-reversed"
+        )
+        assert fields.transaction_id == "TJ2WHT1Z0"
+
     def test_extracts_explicit_description_only(self):
         fields = FieldExtractor.extract_from_text(
             "Description: Order 002\nAmount: $20.00", "test-pid-008"
