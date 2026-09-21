@@ -5,13 +5,38 @@
  * @param {string|null} captionEmail - The normalized WhatsApp caption email
  * @returns {string} The formatted reply message
  */
+function maskEmail(email) {
+  if (typeof email !== 'string' || !email.includes('@')) return 'Not available';
+  const [local, domain] = email.trim().split('@');
+  if (!local || !domain) return 'Not available';
+  if (local.length === 1) return `*@${domain}`;
+  return `${local[0]}***${local[local.length - 1]}@${domain}`;
+}
+
+function maskIdentifier(value) {
+  if (typeof value !== 'string' || !value.trim()) return 'Not available';
+  const identifier = value.trim();
+  const separator = identifier.indexOf('_');
+  const prefix = separator > 0 ? identifier.slice(0, separator + 1) : identifier.slice(0, 2);
+  return `${prefix}…${identifier.slice(-6)}`;
+}
+
 function formatOcrReply(ocrResult, processingId, captionEmail = null) {
   // The OCR API returns extracted values under `fields`. Accepting the
   // legacy top-level shape as well keeps this formatter backward-compatible.
   const fields = ocrResult?.fields || ocrResult || {};
   const verification = ocrResult?.verification;
   const stripeTransaction = verification?.matched_transaction || {};
-  const email = stripeTransaction.customer_email || captionEmail || ocrResult?.caption_email || fields.email || 'Not found';
+  const providedCaptionEmail = typeof captionEmail === 'string' && captionEmail.trim()
+    ? captionEmail.trim()
+    : typeof ocrResult?.caption_email === 'string' && ocrResult.caption_email.trim()
+      ? ocrResult.caption_email.trim()
+      : null;
+  const captionEmailPresent = Boolean(providedCaptionEmail);
+  const canonicalStripeEmail = typeof stripeTransaction.customer_email === 'string'
+    ? stripeTransaction.customer_email
+    : null;
+  const stripeChargeId = verification?.stripe_charge_id || stripeTransaction.stripe_charge_id;
   const amountCents = stripeTransaction.amount_cents ?? fields.amount_cents;
   const amount = amountCents != null
     ? `$${(amountCents / 100).toFixed(2)}`
@@ -21,6 +46,9 @@ function formatOcrReply(ocrResult, processingId, captionEmail = null) {
   const name = stripeTransaction.customer_name || fields.customer_name || fields.name || 'Not found';
   const description = stripeTransaction.description || fields.description || 'Not found';
   const status = stripeTransaction.status || fields.status || 'Not found';
+  const currency = stripeTransaction.currency || 'Not available';
+  const paymentMethod = stripeTransaction.payment_method_type || 'Not available';
+  const stripeCustomerId = stripeTransaction.stripe_customer_id;
   const confidence = ocrResult?.confidence != null ? Math.round(ocrResult.confidence * 100) : 0;
   const provider = ocrResult?.provider || 'tesseract';
   const verdict = verification?.verdict || null;
@@ -36,13 +64,28 @@ function formatOcrReply(ocrResult, processingId, captionEmail = null) {
 
   let reply = `🔍 *Payment Screenshot Analysis*\n`;
   reply += `📋 Processing ID: ${processingId}\n\n`;
-  reply += `📧 Email: ${email}\n`;
+  reply += `📧 Caption email: ${providedCaptionEmail || 'Not provided'}\n`;
+  if (canonicalStripeEmail) {
+    reply += captionEmailPresent
+      ? `📧 Email: ${canonicalStripeEmail}\n`
+      : `📧 Verified Stripe email (masked): ${maskEmail(canonicalStripeEmail)}\n`;
+  } else if (captionEmailPresent) {
+    reply += `📧 Email: ${providedCaptionEmail}\n`;
+  } else {
+    reply += '📧 Verified Stripe email: Not available\n';
+  }
   reply += `💰 Amount: ${amount}\n`;
   reply += `⏱ Minutes: ${minutes}\n`;
   reply += `📅 Date: ${dateStr}\n`;
   reply += `👤 Name: ${name}\n`;
   reply += `📝 Description: ${description}\n`;
-  reply += `✅ Status: ${status}\n\n`;
+  reply += `✅ Status: ${status}\n`;
+  reply += `💱 Currency: ${currency}\n`;
+  reply += `💳 Payment method: ${paymentMethod}\n`;
+  if (stripeCustomerId) {
+    reply += `🆔 Stripe Customer (masked): ${maskIdentifier(stripeCustomerId)}\n`;
+  }
+  reply += '\n';
   reply += `${screenshotStatus === 'ORIGINAL / VALID' ? '✅' : screenshotStatus === 'DUPLICATE' ? '♻️' : '❌'} Screenshot Status: ${screenshotStatus}\n`;
   if (verification?.duplicate_of_processing_id) {
     reply += `🔁 Original Processing ID: ${verification.duplicate_of_processing_id}\n`;
@@ -65,8 +108,11 @@ function formatOcrReply(ocrResult, processingId, captionEmail = null) {
     if (verification.reason_code) {
       reply += `🧾 Verification Reason: ${verification.reason_code}\n`;
     }
-    if (verification.stripe_charge_id) {
-      reply += `🔗 Stripe Charge: ${verification.stripe_charge_id}\n`;
+    if (stripeChargeId) {
+      reply += `🔗 Stripe Charge: ${captionEmailPresent ? stripeChargeId : maskIdentifier(stripeChargeId)}\n`;
+    }
+    if (!captionEmailPresent && verdict === 'VALID') {
+      reply += '🔎 Justification: No email was supplied in the caption. Stripe uniquely matched exactly one eligible succeeded payment using the available receipt evidence. The bot did not invent an email; the displayed identity came from Stripe.\n';
     }
     reply += `\n`;
   }
@@ -89,7 +135,9 @@ function formatStripeCandidateReview(verification) {
   const formatAmount = cents => Number.isInteger(cents)
     ? `$${(cents / 100).toFixed(2)}`
     : 'Not available';
-  const formatValue = value => value == null || value === '' ? 'Not available' : String(value);
+  const formatValue = value => value == null || value === ''
+    ? 'Not available'
+    : String(value).replace(/\s+/g, ' ').slice(0, 160);
   let report = '\n📚 *Stripe Candidate Records (newest first)*\n';
   candidates.forEach((candidate, index) => {
     const label = index === 0 ? 'Most Recent' : `Match ${index + 1}`;
@@ -100,11 +148,11 @@ function formatStripeCandidateReview(verification) {
     report += `✅ Status: ${formatValue(candidate.status)}\n`;
     report += `🕒 Stripe Time: ${paymentDate} ${paymentTime}\n`;
     report += `👤 Customer: ${formatValue(candidate.customer_name)}\n`;
-    report += `📧 Email: ${formatValue(candidate.customer_email)}\n`;
-    report += `🆔 Stripe Customer: ${formatValue(candidate.stripe_customer_id)}\n`;
+    report += `📧 Email (masked): ${candidate.customer_email ? maskEmail(candidate.customer_email) : 'Not available'}\n`;
+    report += `🆔 Stripe Customer: ${candidate.stripe_customer_id ? maskIdentifier(candidate.stripe_customer_id) : 'Not available'}\n`;
     report += `💳 Method: ${formatValue(candidate.payment_method_type)}\n`;
     report += `📝 Description: ${formatValue(candidate.description)}\n`;
-    report += `🔗 Stripe Charge: ${formatValue(candidate.stripe_charge_id)}\n`;
+    report += `🔗 Stripe Charge: ${candidate.stripe_charge_id ? maskIdentifier(candidate.stripe_charge_id) : 'Not available'}\n`;
   });
   report += '\n🛑 No candidate was approved or claimed automatically. Client confirmation is required.\n';
   return report;

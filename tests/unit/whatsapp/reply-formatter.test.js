@@ -20,7 +20,8 @@ test('formats the OCR service fields response shape', () => {
     },
   }, 'wa-test');
 
-  assert.match(reply, /Email: customer@example\.com/);
+  assert.match(reply, /Verified Stripe email: Not available/);
+  assert.doesNotMatch(reply, /customer@example\.com/);
   assert.match(reply, /Amount: \$20\.00/);
   assert.match(reply, /Minutes: 19/);
   assert.match(reply, /Date: 2026-09-09/);
@@ -62,6 +63,41 @@ test('uses Stripe transaction details when verification returns the canonical ch
   assert.match(reply, /Stripe Payment Time: 00:13/);
 });
 
+test('explains a captionless valid payment with Stripe proof and masks public identifiers', () => {
+  const reply = formatOcrReply({
+    provider: 'tesseract',
+    confidence: 0.92,
+    fields: { amount_cents: 677 },
+    verification: {
+      verdict: 'VALID',
+      reason_code: 'EXACT_SINGLE_MATCH',
+      candidate_count: 1,
+      stripe_charge_id: 'ch_captionless_123456',
+      matched_transaction: {
+        stripe_charge_id: 'ch_captionless_123456',
+        stripe_customer_id: 'cus_private_123456',
+        amount_cents: 677,
+        payment_date: '2026-09-20',
+        payment_time: '01:43',
+        customer_name: 'Van Pham',
+        customer_email: 'vanpham@example.com',
+        description: 'Cash App payment',
+        status: 'Completed',
+        payment_method_type: 'cashapp',
+      },
+    },
+  }, 'wa-captionless-proof');
+
+  assert.match(reply, /Caption email: Not provided/);
+  assert.match(reply, /Verified Stripe email \(masked\): v\*\*\*m@example\.com/);
+  assert.match(reply, /Description: Cash App payment/);
+  assert.match(reply, /Stripe Payment Time: 01:43/);
+  assert.match(reply, /Justification: No email was supplied in the caption/);
+  assert.match(reply, /Stripe Charge: ch_…123456/);
+  assert.doesNotMatch(reply, /vanpham@example\.com/);
+  assert.doesNotMatch(reply, /cus_private_123456/);
+});
+
 test('formats the server-side Stripe verification result', () => {
   const reply = formatOcrReply({
     provider: 'tesseract',
@@ -76,7 +112,7 @@ test('formats the server-side Stripe verification result', () => {
 
   assert.match(reply, /Stripe Verification: VALID/);
   assert.match(reply, /Verification Reason: EXACT_SINGLE_MATCH/);
-  assert.match(reply, /Stripe Charge: ch_test_123/);
+  assert.match(reply, /Stripe Charge: ch_…st_123/);
   assert.match(reply, /Screenshot Status: ORIGINAL \/ VALID/);
 });
 
@@ -141,10 +177,10 @@ test('formats an ambiguous payment as review-required rather than fake', () => {
   assert.match(reply, /Stripe candidates reviewed: 2/);
   assert.match(reply, /Stripe Candidate Records \(newest first\)/);
   assert.match(reply, /Candidate 1 — Most Recent/);
-  assert.match(reply, /ch_recent/);
+  assert.match(reply, /ch_…recent/);
   assert.match(reply, /Recent payment/);
   assert.match(reply, /Candidate 2 — Match 2/);
-  assert.match(reply, /ch_previous/);
+  assert.match(reply, /ch_…evious/);
   assert.match(reply, /No candidate was approved or claimed automatically/);
   assert.match(reply, /not a fraud determination/);
 });

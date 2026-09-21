@@ -169,7 +169,10 @@ test('processes a captionless image so Stripe can recover identity from OCR evid
   await handler({ messages: [imageMessage('1234567890-1234567890@g.us')] });
 
   assert.equal(events.length, 2);
-  assert.match(events[0].text, /Email: recovered@example\.com/);
+  assert.match(events[0].text, /Caption email: Not provided/);
+  assert.match(events[0].text, /Verified Stripe email \(masked\): r\*\*\*d@example\.com/);
+  assert.doesNotMatch(events[0].text, /recovered@example\.com/);
+  assert.match(events[0].text, /Justification: No email was supplied in the caption/);
   assert.match(events[0].text, /Stripe Verification: VALID/);
   assert.deepEqual(events[1], { react: { text: '✅', key: imageMessage('1234567890-1234567890@g.us').key } });
 });

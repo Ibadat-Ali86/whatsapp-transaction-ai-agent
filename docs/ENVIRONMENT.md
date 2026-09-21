@@ -40,6 +40,10 @@ a unique eligible Stripe match; every non-duplicate non-valid result uses
 Captionless valid results and valid results whose caption identity was
 corrected by Stripe also send a detailed reply containing the canonical
 Stripe-recovered email so the group can see which customer was matched.
+When the caption is absent, the reply explicitly says so and shows a masked
+Stripe email and masked identifiers, together with the verified amount, time,
+status, payment method, customer name when present, and description. It never
+uses an OCR guess as a verified identity or publishes raw Stripe objects.
 Duplicate results remain text replies so the bot can explain the original
 processing record. Ambiguous Stripe results remain review-only, but now include
 the sanitized eligible candidate records in newest-first order so the client

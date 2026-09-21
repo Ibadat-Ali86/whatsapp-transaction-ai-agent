@@ -128,6 +128,9 @@ window. This is not a recency-only or amount-only approval.
 matched_transaction
 Canonical amount, local date/time, customer name, description, status, and
 payment method returned only for one eligible Stripe match.
+Captionless public replies label the caption as absent and mask the Stripe
+email, customer ID, and charge ID; the underlying verification result remains
+the source of truth.
 
 candidate_transactions
 Sanitized Stripe records returned only for an ambiguous review result. They
