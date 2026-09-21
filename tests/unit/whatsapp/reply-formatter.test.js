@@ -140,6 +140,7 @@ test('formats duplicate and unclear screenshot statuses safely', () => {
 
 test('formats an ambiguous payment as review-required rather than fake', () => {
   const reply = formatVerificationFailureReply({
+    fields: { payment_date: '2026-09-20' },
     verification: {
       verdict: 'UNCLEAR',
       reason_code: 'MULTIPLE_EXACT_MATCHES',
@@ -175,12 +176,13 @@ test('formats an ambiguous payment as review-required rather than fake', () => {
   assert.match(reply, /multiple eligible payments/);
   assert.match(reply, /Verification reason: MULTIPLE_EXACT_MATCHES/);
   assert.match(reply, /Stripe candidates reviewed: 2/);
-  assert.match(reply, /Stripe Candidate Records \(newest first\)/);
+  assert.match(reply, /Newest Stripe Candidate \(review context\)/);
+  assert.match(reply, /Only the newest of 2 eligible candidate records is shown/);
   assert.match(reply, /Candidate 1 — Most Recent/);
   assert.match(reply, /ch_…recent/);
   assert.match(reply, /Recent payment/);
-  assert.match(reply, /Candidate 2 — Match 2/);
-  assert.match(reply, /ch_…evious/);
+  assert.doesNotMatch(reply, /Candidate 2 — Match 2/);
+  assert.doesNotMatch(reply, /ch_…evious/);
   assert.match(reply, /No candidate was approved or claimed automatically/);
   assert.match(reply, /not a fraud determination/);
 });

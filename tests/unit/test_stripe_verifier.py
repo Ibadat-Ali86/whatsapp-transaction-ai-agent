@@ -853,6 +853,43 @@ async def test_customer_matching_uses_receipt_date_and_hour_before_broad_fallbac
 
 
 @pytest.mark.asyncio
+async def test_receipt_date_never_falls_back_to_stale_customer_amount_matches():
+    """An old same-email/amount charge must not become a false candidate.
+
+    This reproduces the production failure where a receipt saying "Today"
+    lost its resolved date and the verifier later ignored the date entirely.
+    The safe result is no exact match, not approval and not an ambiguous list
+    of stale historical payments.
+    """
+    def responses(request):
+        if request.url.path == "/v1/customers":
+            return httpx.Response(200, json={"data": [{"id": "cus_customer", "email": "customer@example.com"}]})
+        assert request.url.path in {"/v1/charges", "/v1/charges/search"}
+        return httpx.Response(200, json={
+            "data": [
+                charge("ch_old_one", created=stripe_timestamp(hour=14, minute=31)),
+                charge("ch_old_two", created=stripe_timestamp(hour=15, minute=31)),
+            ],
+            "has_more": False,
+        })
+
+    result, _ = await verify_with_responses(
+        responses,
+        evidence_value=evidence(
+            payment_date=datetime(2026, 9, 21, tzinfo=timezone.utc).date(),
+            payment_hour=2,
+            minutes=53,
+        ),
+    )
+
+    assert result.status == "NO_MATCH"
+    assert result.verdict == "UNCLEAR"
+    assert result.reason_code == "NO_EXACT_MATCH"
+    assert result.candidate_count == 0
+    assert result.stripe_charge_id is None
+
+
+@pytest.mark.asyncio
 async def test_wrong_amount_is_not_approved():
     def responses(request):
         if request.url.path == "/v1/customers":

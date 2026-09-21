@@ -136,8 +136,12 @@ accepted because this is a server-side API integration.
 
 When several eligible Stripe charges match the screenshot, the verifier
 returns `candidate_transactions` for the WhatsApp review report. Candidate
-order is for investigation convenience, not a recency-based approval rule.
-The bot approves only one uniquely proven charge.
+order is for investigation convenience, not a recency-based approval rule. The
+WhatsApp reply shows only the newest candidate as review context and keeps the
+full count; it does not approve that candidate automatically. If receipt date
+or month/day evidence exists, historical email/amount fallbacks cannot ignore
+it. The bot approves only one uniquely proven charge, including a bounded
+timezone-boundary match with strong identity evidence.
 
 ## Duplicate detection
 

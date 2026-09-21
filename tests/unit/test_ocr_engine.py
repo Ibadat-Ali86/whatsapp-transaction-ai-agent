@@ -174,3 +174,45 @@ def test_ai_enrichment_preserves_deterministic_customer_name(monkeypatch):
     assert result.error is None
     assert result.fields is not None
     assert result.fields.customer_name == "Van Pham"
+
+
+def test_ai_date_cannot_override_deterministic_receipt_month_and_day(monkeypatch):
+    settings = SimpleNamespace(
+        AI_PROVIDER="groq",
+        MAX_IMAGE_SIZE_MB=10.0,
+        OCR_CONFIDENCE_THRESHOLD=0.85,
+    )
+    tesseract_result = TesseractResult(
+        raw_text="AQ Digital LLC\nToday at 2:53 AM\n$5.00\nCompleted\nPayment date\nMon, Sep 21",
+        confidence=0.42,
+        word_count=12,
+        processing_time_ms=10,
+        preprocessing_strategy="basic",
+    )
+
+    class WrongDateProvider:
+        name = "groq"
+
+        def extract_payment_fields(self, _image_bytes, _processing_id):
+            return AIExtractionResult(
+                provider_name="groq",
+                raw_text='{"amount":"$5.00","payment_date":"2026-09-19"}',
+                fields={"amount": "$5.00", "payment_date": "2026-09-19"},
+                confidence=1.0,
+                processing_time_ms=20,
+                model_used="unit-test",
+            )
+
+    monkeypatch.setattr(engine, "get_settings", lambda: settings)
+    monkeypatch.setattr(engine, "save_temp_image", lambda *_args: None)
+    monkeypatch.setattr(engine, "delete_temp_image", lambda _path: None)
+    monkeypatch.setattr(engine.TesseractProcessor, "extract", lambda *_args: tesseract_result)
+    monkeypatch.setattr(engine, "get_provider", lambda _name: WrongDateProvider())
+
+    result = OCREngine.process_image(b"\xff\xd8\xffsynthetic", "wa-test-date-conflict", "image/jpeg")
+
+    assert result.error is None
+    assert result.fields is not None
+    assert result.fields.payment_date is None
+    assert result.fields.payment_month == 9
+    assert result.fields.payment_day == 21

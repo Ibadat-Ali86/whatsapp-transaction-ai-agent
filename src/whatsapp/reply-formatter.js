@@ -126,11 +126,16 @@ function formatOcrReply(ocrResult, processingId, captionEmail = null) {
   return reply;
 }
 
-function formatStripeCandidateReview(verification) {
-  const candidates = Array.isArray(verification?.candidate_transactions)
+function formatStripeCandidateReview(verification, ocrResult = {}) {
+  const allCandidates = Array.isArray(verification?.candidate_transactions)
     ? verification.candidate_transactions.filter(candidate => candidate && typeof candidate === 'object')
     : [];
-  if (!candidates.length) return '';
+  if (!allCandidates.length) return '';
+  // The API may retain the full sanitized candidate set for audit/debugging,
+  // but a WhatsApp reply should expose only the newest candidate. This keeps
+  // the response actionable and avoids implying that an older amount match
+  // is also evidence for the submitted receipt.
+  const candidates = allCandidates.slice(0, 1);
 
   const formatAmount = cents => Number.isInteger(cents)
     ? `$${(cents / 100).toFixed(2)}`
@@ -138,7 +143,14 @@ function formatStripeCandidateReview(verification) {
   const formatValue = value => value == null || value === ''
     ? 'Not available'
     : String(value).replace(/\s+/g, ' ').slice(0, 160);
-  let report = '\n📚 *Stripe Candidate Records (newest first)*\n';
+  const receiptDate = ocrResult?.fields?.payment_date || null;
+  const newestCandidateDate = candidates[0]?.payment_date || null;
+  const dateMismatch = receiptDate && newestCandidateDate && receiptDate !== newestCandidateDate;
+  let report = '\n📚 *Newest Stripe Candidate (review context)*\n';
+  report += `Only the newest of ${allCandidates.length} eligible candidate record${allCandidates.length === 1 ? '' : 's'} is shown below; no candidate was approved automatically.\n`;
+  if (dateMismatch) {
+    report += `⚠️ Receipt date ${receiptDate} does not match the newest Stripe candidate date ${newestCandidateDate}; it remains review-only.\n`;
+  }
   candidates.forEach((candidate, index) => {
     const label = index === 0 ? 'Most Recent' : `Match ${index + 1}`;
     const paymentDate = candidate.payment_date || 'Not available';
@@ -200,7 +212,7 @@ function formatVerificationFailureReply(ocrResult, processingId) {
   const candidateReport = reason === 'MULTIPLE_EXACT_MATCHES'
     || reason === 'MULTIPLE_IDENTITY_RECOVERY_MATCHES'
     || reason === 'MULTIPLE_TRANSACTION_ID_MATCHES'
-    ? formatStripeCandidateReview(verification)
+    ? formatStripeCandidateReview(verification, ocrResult)
     : '';
   return `${heading}\n📋 Processing ID: ${processingId}\n\n${reasonText}\n🧾 Verification reason: ${reason}\n📊 Stripe candidates reviewed: ${candidateCount ?? 'not available'}${sameImageNote}${imageConflictNote}${candidateReport}\n${conclusion}`;
 }

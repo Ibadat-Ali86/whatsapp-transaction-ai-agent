@@ -873,6 +873,9 @@ class StripeVerifier:
             for value in (evidence.email, *evidence.email_candidates)
             if isinstance(value, str) and value
         }
+        has_receipt_date = evidence.payment_date is not None or (
+            evidence.payment_month is not None and evidence.payment_day is not None
+        )
         email_hash = _email_hash(evidence.email)
         evidence_constraint_count = self._evidence_constraint_count(evidence)
         if not identity_emails and evidence_constraint_count < 2 and not evidence.transaction_id:
@@ -1226,7 +1229,7 @@ class StripeVerifier:
             # fallback when a receipt minute was OCR'd incorrectly or belongs
             # to a different display timezone. It only proceeds when the
             # identity/amount/status/payment-method match is unique.
-            if not matches and identity_emails:
+            if not matches and identity_emails and not has_receipt_date:
                 # First tolerate only a date/hour conversion issue while
                 # retaining the receipt minute. This resolves a valid charge
                 # when the screenshot clock is in a nearby timezone without
@@ -1238,7 +1241,7 @@ class StripeVerifier:
                     match_minute=evidence.minutes is not None,
                 )
                 matches = prefer_one_fresh_candidate(matches)
-            if not matches and identity_emails:
+            if not matches and identity_emails and not has_receipt_date:
                 matches = matches_for(
                     charges,
                     include_time_constraints=False,
@@ -1252,7 +1255,7 @@ class StripeVerifier:
             # with a bounded fallback only when the cheaper customer-scoped
             # search produced no match; never broaden an already successful
             # match into a second candidate set.
-            if not matches and customer_ids:
+            if not matches and customer_ids and not has_receipt_date:
                 charges = (
                     await self._charges_for_day(client, start_timestamp, end_timestamp)
                     if evidence.payment_date is not None
@@ -1265,7 +1268,7 @@ class StripeVerifier:
                     match_minute=True,
                 )
                 matches = prefer_one_fresh_candidate(matches)
-                if not matches and identity_emails:
+                if not matches and identity_emails and not has_receipt_date:
                     matches = matches_for(
                         charges,
                         include_time_constraints=False,
@@ -1317,22 +1320,22 @@ class StripeVerifier:
                         if boundary_matches:
                             matches = boundary_matches
                             timezone_boundary_match = len(boundary_matches) == 1
-                    if not matches and identity_emails:
-                        matches = matches_for(
-                            charges,
-                            include_time_constraints=False,
-                            match_hour=False,
-                            match_minute=evidence.minutes is not None,
-                        )
-                        matches = prefer_one_fresh_candidate(matches)
-                    if not matches and identity_emails:
-                        matches = matches_for(
-                            charges,
-                            include_time_constraints=False,
-                            match_hour=False,
-                            match_minute=False,
-                        )
-                        matches = prefer_one_fresh_candidate(matches)
+                if not matches and identity_emails and not has_receipt_date:
+                    matches = matches_for(
+                        charges,
+                        include_time_constraints=False,
+                        match_hour=False,
+                        match_minute=evidence.minutes is not None,
+                    )
+                    matches = prefer_one_fresh_candidate(matches)
+                if not matches and identity_emails and not has_receipt_date:
+                    matches = matches_for(
+                        charges,
+                        include_time_constraints=False,
+                        match_hour=False,
+                        match_minute=False,
+                    )
+                    matches = prefer_one_fresh_candidate(matches)
 
             # A screenshot/provider transaction ID is a high-strength lookup
             # hint. Use it after the normal customer search and its bounded

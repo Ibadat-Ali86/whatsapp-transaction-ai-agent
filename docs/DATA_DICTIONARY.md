@@ -139,6 +139,12 @@ Stripe exposes it, amount, local Stripe date/time, status, payment method, and
 description. These records are evidence for the client; they never create a
 claim, duplicate record, or automatic approval.
 
+receipt_date_guard
+When a receipt date or month/day is available, historical email/amount
+fallbacks cannot ignore that date. A valid timezone-boundary recovery must
+still satisfy the bounded receipt-minute and strong-identity checks; a stale
+candidate is not selected merely because it is newest in a broad lookback.
+
 verdict
 VALID/FAKE/DUPLICATE/SUSPICIOUS/UNCLEAR/ERROR.
 

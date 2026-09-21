@@ -83,6 +83,9 @@ class OCREngine:
                 # evidence. Preserve deterministic local fields when the
                 # provider omits one, especially the customer name used for
                 # safe Stripe disambiguation.
+                deterministic_payment_date = fields.payment_date
+                deterministic_payment_month = fields.payment_month
+                deterministic_payment_day = fields.payment_day
                 for field_name in (
                     'email', 'transaction_id', 'amount_cents', 'minutes',
                     'payment_hour', 'payment_date', 'payment_month',
@@ -90,6 +93,18 @@ class OCREngine:
                 ):
                     if getattr(ai_fields, field_name) is None:
                         setattr(ai_fields, field_name, getattr(fields, field_name))
+                # Receipt dates are a high-impact Stripe search constraint.
+                # Prefer deterministic local OCR for the visible date/month/day
+                # instead of allowing a vision model to invent a different
+                # calendar date. When only month/day is visible, clear an AI
+                # year so the n8n layer can infer the year from the message
+                # receive time and configured Stripe timezone.
+                if deterministic_payment_date:
+                    ai_fields.payment_date = deterministic_payment_date
+                elif deterministic_payment_month is not None and deterministic_payment_day is not None:
+                    ai_fields.payment_date = None
+                    ai_fields.payment_month = deterministic_payment_month
+                    ai_fields.payment_day = deterministic_payment_day
                 # Description is not present on the current receipt format.
                 # Do not let a vision model invent one and use it as a hard
                 # Stripe filter. If a future receipt explicitly exposes a
