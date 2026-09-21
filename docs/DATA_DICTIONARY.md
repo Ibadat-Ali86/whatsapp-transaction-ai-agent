@@ -129,6 +129,13 @@ matched_transaction
 Canonical amount, local date/time, customer name, description, status, and
 payment method returned only for one eligible Stripe match.
 
+candidate_transactions
+Sanitized Stripe records returned only for an ambiguous review result. They
+are ordered newest-first and contain the charge ID, customer identity when
+Stripe exposes it, amount, local Stripe date/time, status, payment method, and
+description. These records are evidence for the client; they never create a
+claim, duplicate record, or automatic approval.
+
 verdict
 VALID/FAKE/DUPLICATE/SUSPICIOUS/UNCLEAR/ERROR.
 

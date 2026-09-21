@@ -108,6 +108,30 @@ test('formats an ambiguous payment as review-required rather than fake', () => {
       verdict: 'UNCLEAR',
       reason_code: 'MULTIPLE_EXACT_MATCHES',
       candidate_count: 2,
+      candidate_transactions: [
+        {
+          stripe_charge_id: 'ch_recent',
+          stripe_customer_id: 'cus_customer',
+          amount_cents: 1000,
+          currency: 'usd',
+          payment_date: '2026-09-20',
+          payment_time: '06:45',
+          customer_name: 'Jenny Waters',
+          customer_email: 'jenny@example.com',
+          description: 'Recent payment',
+          status: 'Completed',
+          payment_method_type: 'cashapp',
+        },
+        {
+          stripe_charge_id: 'ch_previous',
+          amount_cents: 1000,
+          payment_date: '2026-09-19',
+          payment_time: '22:10',
+          description: 'Previous payment',
+          status: 'Completed',
+          payment_method_type: 'cashapp',
+        },
+      ],
     },
   }, 'wa-unconfirmed');
 
@@ -115,6 +139,13 @@ test('formats an ambiguous payment as review-required rather than fake', () => {
   assert.match(reply, /multiple eligible payments/);
   assert.match(reply, /Verification reason: MULTIPLE_EXACT_MATCHES/);
   assert.match(reply, /Stripe candidates reviewed: 2/);
+  assert.match(reply, /Stripe Candidate Records \(newest first\)/);
+  assert.match(reply, /Candidate 1 — Most Recent/);
+  assert.match(reply, /ch_recent/);
+  assert.match(reply, /Recent payment/);
+  assert.match(reply, /Candidate 2 — Match 2/);
+  assert.match(reply, /ch_previous/);
+  assert.match(reply, /No candidate was approved or claimed automatically/);
   assert.match(reply, /not a fraud determination/);
 });
 

@@ -676,6 +676,47 @@ async def test_ambiguous_exact_matches_fail_closed():
     assert result.reason_code == "MULTIPLE_EXACT_MATCHES"
     assert result.stripe_charge_id is None
     assert result.candidate_count == 2
+    assert [candidate["stripe_charge_id"] for candidate in result.candidate_transactions] == [
+        "ch_one",
+        "ch_two",
+    ]
+    assert result.candidate_transactions[0]["description"] == "Order 001"
+    assert result.candidate_transactions[0]["status"] == "Completed"
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_candidates_are_reported_newest_first_without_approval():
+    def responses(request):
+        if request.url.path == "/v1/customers":
+            return httpx.Response(200, json={"data": [{"id": "cus_customer", "email": "customer@example.com"}]})
+        return httpx.Response(200, json={
+            "data": [
+                charge(
+                    "ch_older",
+                    created=int(datetime(2026, 9, 9, 10, 31, tzinfo=timezone.utc).timestamp()),
+                    description="Older payment",
+                    receipt_email="customer@example.com",
+                ),
+                charge(
+                    "ch_newer",
+                    created=int(datetime(2026, 9, 9, 18, 31, tzinfo=timezone.utc).timestamp()),
+                    description="Recent payment",
+                    receipt_email="customer@example.com",
+                ),
+            ],
+            "has_more": False,
+        })
+
+    result, _ = await verify_with_responses(responses)
+
+    assert result.verdict == "UNCLEAR"
+    assert result.reason_code == "MULTIPLE_EXACT_MATCHES"
+    assert [candidate["stripe_charge_id"] for candidate in result.candidate_transactions] == [
+        "ch_newer",
+        "ch_older",
+    ]
+    assert result.candidate_transactions[0]["description"] == "Recent payment"
+    assert result.stripe_charge_id is None
 
 
 @pytest.mark.asyncio

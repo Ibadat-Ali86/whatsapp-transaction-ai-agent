@@ -41,7 +41,10 @@ Captionless valid results and valid results whose caption identity was
 corrected by Stripe also send a detailed reply containing the canonical
 Stripe-recovered email so the group can see which customer was matched.
 Duplicate results remain text replies so the bot can explain the original
-processing record.
+processing record. Ambiguous Stripe results remain review-only, but now include
+the sanitized eligible candidate records in newest-first order so the client
+can decide without opening Stripe manually. No candidate in that report is
+claimed or approved automatically.
 `REQUIRE_EMAIL_CAPTION` is retained for compatibility but should be `false`:
 the caption email is preferred evidence, not a prerequisite. Missing or
 incorrect captions are recovered only from deterministic OCR evidence and one
@@ -126,6 +129,11 @@ When `STRIPE_MODE=test`, use standard `sk_test_` or restricted `rk_test_`
 keys. For an explicitly approved live environment, set `STRIPE_MODE=live` and
 use `sk_live_` or restricted `rk_live_`. Publishable `pk_` keys are never
 accepted because this is a server-side API integration.
+
+When several eligible Stripe charges match the screenshot, the verifier
+returns `candidate_transactions` for the WhatsApp review report. Candidate
+order is for investigation convenience, not a recency-based approval rule.
+The bot approves only one uniquely proven charge.
 
 ## Duplicate detection
 

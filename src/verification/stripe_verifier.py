@@ -91,6 +91,7 @@ class StripeVerificationResult:
     email_hash: Optional[str] = None
     retryable: bool = False
     matched_transaction: Optional[dict[str, Any]] = None
+    candidate_transactions: Optional[list[dict[str, Any]]] = None
 
     def as_dict(self) -> dict[str, Any]:
         result = {
@@ -106,6 +107,8 @@ class StripeVerificationResult:
         }
         if self.matched_transaction is not None:
             result["matched_transaction"] = self.matched_transaction
+        if self.candidate_transactions is not None:
+            result["candidate_transactions"] = self.candidate_transactions
         return result
 
 
@@ -776,6 +779,8 @@ class StripeVerifier:
         customer_email = StripeVerifier._charge_email(charge)
 
         return {
+            "stripe_charge_id": charge.get("id"),
+            "stripe_customer_id": charge.get("customer") if isinstance(charge.get("customer"), str) else None,
             "amount_cents": charge.get("amount"),
             "currency": charge.get("currency"),
             "payment_date": local_created.date().isoformat(),
@@ -1118,6 +1123,32 @@ class StripeVerifier:
                     boundary_matches.append(charge)
                 return boundary_matches
 
+            async def candidate_transactions_for(
+                candidate_charges: list[dict[str, Any]],
+            ) -> list[dict[str, Any]]:
+                """Return review-safe candidate evidence, newest first.
+
+                Ambiguous candidates are evidence for a human decision, not an
+                approval signal. Keep the report limited to fields useful for
+                reconciliation; never serialize the raw Stripe charge object.
+                """
+                ordered_charges = sorted(
+                    candidate_charges,
+                    key=lambda charge: (
+                        charge.get("created")
+                        if isinstance(charge.get("created"), (int, float))
+                        else float("-inf")
+                    ),
+                    reverse=True,
+                )
+                transactions: list[dict[str, Any]] = []
+                for charge in ordered_charges:
+                    details = self._transaction_details(charge, zone)
+                    if details is None:
+                        continue
+                    transactions.append(details)
+                return transactions
+
             timezone_boundary_match = False
 
             matches = matches_for(
@@ -1367,6 +1398,7 @@ class StripeVerifier:
                     "MULTIPLE_TRANSACTION_ID_MATCHES",
                     candidate_count=len(transaction_matches),
                     email_hash=email_hash,
+                    candidate_transactions=await candidate_transactions_for(transaction_matches),
                 )
                 self.audit_logger.log_verification(processing_id, result, safe_details="ambiguous_transaction_id")
                 return result
@@ -1405,6 +1437,7 @@ class StripeVerifier:
                         "MULTIPLE_IDENTITY_RECOVERY_MATCHES",
                         candidate_count=len(recovery_matches),
                         email_hash=email_hash,
+                        candidate_transactions=await candidate_transactions_for(recovery_matches),
                     )
                     self.audit_logger.log_verification(processing_id, result, safe_details="ambiguous_identity_recovery")
                     return result
@@ -1441,6 +1474,7 @@ class StripeVerifier:
                     "MULTIPLE_EXACT_MATCHES",
                     candidate_count=len(matches),
                     email_hash=email_hash,
+                    candidate_transactions=await candidate_transactions_for(matches),
                 )
             else:
                 result = StripeVerificationResult(

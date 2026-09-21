@@ -80,6 +80,36 @@ function formatOcrReply(ocrResult, processingId, captionEmail = null) {
   return reply;
 }
 
+function formatStripeCandidateReview(verification) {
+  const candidates = Array.isArray(verification?.candidate_transactions)
+    ? verification.candidate_transactions.filter(candidate => candidate && typeof candidate === 'object')
+    : [];
+  if (!candidates.length) return '';
+
+  const formatAmount = cents => Number.isInteger(cents)
+    ? `$${(cents / 100).toFixed(2)}`
+    : 'Not available';
+  const formatValue = value => value == null || value === '' ? 'Not available' : String(value);
+  let report = '\n📚 *Stripe Candidate Records (newest first)*\n';
+  candidates.forEach((candidate, index) => {
+    const label = index === 0 ? 'Most Recent' : `Match ${index + 1}`;
+    const paymentDate = candidate.payment_date || 'Not available';
+    const paymentTime = candidate.payment_time || 'time unavailable';
+    report += `\n🔹 *Candidate ${index + 1} — ${label}*\n`;
+    report += `💰 Amount: ${formatAmount(candidate.amount_cents)}\n`;
+    report += `✅ Status: ${formatValue(candidate.status)}\n`;
+    report += `🕒 Stripe Time: ${paymentDate} ${paymentTime}\n`;
+    report += `👤 Customer: ${formatValue(candidate.customer_name)}\n`;
+    report += `📧 Email: ${formatValue(candidate.customer_email)}\n`;
+    report += `🆔 Stripe Customer: ${formatValue(candidate.stripe_customer_id)}\n`;
+    report += `💳 Method: ${formatValue(candidate.payment_method_type)}\n`;
+    report += `📝 Description: ${formatValue(candidate.description)}\n`;
+    report += `🔗 Stripe Charge: ${formatValue(candidate.stripe_charge_id)}\n`;
+  });
+  report += '\n🛑 No candidate was approved or claimed automatically. Client confirmation is required.\n';
+  return report;
+}
+
 /**
  * Formats a non-approving verification result. The reaction is deliberately
  * paired with an explanation so a failed lookup is not mistaken for an
@@ -119,7 +149,12 @@ function formatVerificationFailureReply(ocrResult, processingId) {
   const imageConflictNote = reason === 'IMAGE_MATCH_DIFFERENT_STRIPE_CHARGE'
     ? `\n🖼️ Prior matching screenshot: ${verification.image_conflict_original_processing_id || 'previous processing'}\n🔗 Prior Stripe charge: ${verification.image_conflict_original_stripe_charge_id || 'not recorded'}\n🔗 Current Stripe charge: ${verification.stripe_charge_id || 'not recorded'}\nAutomatic approval was blocked because the receipt image conflicts with the current Stripe record.`
     : '';
-  return `${heading}\n📋 Processing ID: ${processingId}\n\n${reasonText}\n🧾 Verification reason: ${reason}\n📊 Stripe candidates reviewed: ${candidateCount ?? 'not available'}${sameImageNote}${imageConflictNote}\n\n${conclusion}`;
+  const candidateReport = reason === 'MULTIPLE_EXACT_MATCHES'
+    || reason === 'MULTIPLE_IDENTITY_RECOVERY_MATCHES'
+    || reason === 'MULTIPLE_TRANSACTION_ID_MATCHES'
+    ? formatStripeCandidateReview(verification)
+    : '';
+  return `${heading}\n📋 Processing ID: ${processingId}\n\n${reasonText}\n🧾 Verification reason: ${reason}\n📊 Stripe candidates reviewed: ${candidateCount ?? 'not available'}${sameImageNote}${imageConflictNote}${candidateReport}\n${conclusion}`;
 }
 
 /**
@@ -183,6 +218,7 @@ function formatErrorReply(processingId) {
 
 module.exports = {
   formatOcrReply,
+  formatStripeCandidateReview,
   formatDuplicateReply,
   formatVerificationFailureReply,
   formatErrorReply,

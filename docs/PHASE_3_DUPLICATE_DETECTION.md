@@ -45,6 +45,13 @@ status, and a strong identity constraint. A captionless receipt must provide an
 exact customer name, description, or provider identifier for this path; two or
 more eligible candidates remain `UNCLEAR`.
 
+When an unresolved result has multiple eligible Stripe candidates, the
+verification response includes a sanitized `candidate_transactions` report in
+newest-first order. The WhatsApp reply shows each candidate's charge ID,
+amount, Stripe time, customer fields, payment method, status, and description.
+This is a manual-decision aid only: no candidate is claimed, approved, or
+treated as fake until an authorized human review decision selects one.
+
 The WhatsApp adapter reacts with `✅` only for a clear valid Stripe match and
 uses `❌` for invalid, errored, or unresolved results. Non-valid results also
 include a concise justification when bot replies are enabled; unresolved
