@@ -145,6 +145,11 @@ fallbacks cannot ignore that date. A valid timezone-boundary recovery must
 still satisfy the bounded receipt-minute and strong-identity checks; a stale
 candidate is not selected merely because it is newest in a broad lookback.
 
+PAYMENT_REVIEW_ADMIN_JIDS
+Direct WhatsApp recipients for complete multi-match candidate proof. This is
+private operational output and is never a Stripe secret or raw API response;
+group JIDs are invalid recipients.
+
 verdict
 VALID/FAKE/DUPLICATE/SUSPICIOUS/UNCLEAR/ERROR.
 

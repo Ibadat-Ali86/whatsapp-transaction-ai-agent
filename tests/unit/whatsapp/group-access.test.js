@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   parseAllowedGroupJids,
+  parsePrivateReviewJids,
   isAllowedGroupJid,
   shouldIgnoreJid,
 } = require('../../../src/whatsapp/group-access');
@@ -37,6 +38,21 @@ test('allows only exact configured group JIDs', () => {
 test('fails closed when no groups are configured', () => {
   assert.deepEqual(parseAllowedGroupJids('', undefined), []);
   assert.equal(isAllowedGroupJid('1234567890-1234567890@g.us', []), false);
+});
+
+test('accepts only direct WhatsApp JIDs for private payment review proof', () => {
+  assert.deepEqual(
+    parsePrivateReviewJids(' 923001234567@s.whatsapp.net,267228989665304@lid,923001234567@s.whatsapp.net '),
+    ['923001234567@s.whatsapp.net', '267228989665304@lid']
+  );
+  assert.deepEqual(parsePrivateReviewJids(''), []);
+});
+
+test('rejects groups as private payment review recipients', () => {
+  assert.throws(
+    () => parsePrivateReviewJids('1234567890-1234567890@g.us'),
+    /Invalid private review JID/
+  );
 });
 
 test('does not filter direct protocol JIDs needed for group encryption', () => {

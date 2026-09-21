@@ -85,6 +85,15 @@ The allowlist is enforced in two places:
 
 An empty allowlist is fail-closed. The bot may connect for setup, but it must not process messages until at least one approved group JID is configured.
 
+## Private payment review proof
+
+Full Stripe candidate identity data is never sent to a group by the review
+workflow. Configure only direct WhatsApp recipients in
+`PAYMENT_REVIEW_ADMIN_JIDS`; group JIDs are rejected. The private message
+contains sanitized candidate fields rather than raw Stripe API objects, and it
+is explicitly marked as sensitive. The Stripe secret key and service tokens
+are never included in any reply.
+
 ## n8n
 
 Restrict admin access.

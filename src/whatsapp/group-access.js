@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 
 const GROUP_JID_PATTERN = /^[0-9][0-9-]*@g\.us$/;
+const PRIVATE_REVIEW_JID_PATTERN = /^[0-9]+@(s\.whatsapp\.net|lid)$/;
 
 function isGroupJid(jid) {
   return typeof jid === 'string' && jid.endsWith('@g.us');
@@ -25,6 +26,22 @@ function parseAllowedGroupJids(...values) {
   return uniqueGroupJids;
 }
 
+function parsePrivateReviewJids(value) {
+  const jids = typeof value === 'string'
+    ? value.split(',').map(candidate => candidate.trim()).filter(Boolean)
+    : [];
+  const uniqueJids = [...new Set(jids)];
+  const invalidJids = uniqueJids.filter(jid => !PRIVATE_REVIEW_JID_PATTERN.test(jid));
+
+  if (invalidJids.length > 0) {
+    throw new Error(
+      `Invalid private review JID(s): ${invalidJids.join(', ')}. Use direct WhatsApp JIDs like 923001234567@s.whatsapp.net.`
+    );
+  }
+
+  return uniqueJids;
+}
+
 function isAllowedGroupJid(remoteJid, allowedGroupJids) {
   return isGroupJid(remoteJid) && Array.isArray(allowedGroupJids) && allowedGroupJids.includes(remoteJid);
 }
@@ -41,6 +58,7 @@ function hashGroupJid(groupJid) {
 
 module.exports = {
   parseAllowedGroupJids,
+  parsePrivateReviewJids,
   isGroupJid,
   isAllowedGroupJid,
   shouldIgnoreJid,

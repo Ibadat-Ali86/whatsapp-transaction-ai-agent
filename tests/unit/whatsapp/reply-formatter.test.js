@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   formatOcrReply,
+  formatPrivateStripeCandidateReview,
   formatDuplicateReply,
   formatVerificationFailureReply,
 } = require('../../../src/whatsapp/reply-formatter');
@@ -185,6 +186,48 @@ test('formats an ambiguous payment as review-required rather than fake', () => {
   assert.doesNotMatch(reply, /ch_…evious/);
   assert.match(reply, /No candidate was approved or claimed automatically/);
   assert.match(reply, /not a fraud determination/);
+});
+
+test('formats full candidate proof only for the private admin channel', () => {
+  const reply = formatPrivateStripeCandidateReview({
+    verification: {
+      reason_code: 'MULTIPLE_EXACT_MATCHES',
+      candidate_count: 2,
+      candidate_transactions: [
+        {
+          stripe_charge_id: 'ch_recent_full',
+          stripe_customer_id: 'cus_recent_full',
+          amount_cents: 500,
+          currency: 'usd',
+          payment_date: '2026-09-21',
+          payment_time: '04:53',
+          customer_name: 'Alexis Beltran',
+          customer_email: 'alexis@example.com',
+          description: 'Custom Website Development',
+          status: 'Completed',
+          payment_method_type: 'cashapp',
+        },
+        {
+          stripe_charge_id: 'ch_older_full',
+          stripe_customer_id: 'cus_older_full',
+          amount_cents: 500,
+          currency: 'usd',
+          payment_date: '2026-09-19',
+          payment_time: '19:42',
+          customer_email: 'alexis@example.com',
+          status: 'Completed',
+          payment_method_type: 'cashapp',
+        },
+      ],
+    },
+  }, 'wa-private-review');
+
+  assert.match(reply, /Private Stripe Payment Review/);
+  assert.match(reply, /alexis@example\.com/);
+  assert.match(reply, /cus_recent_full/);
+  assert.match(reply, /ch_recent_full/);
+  assert.match(reply, /ch_older_full/);
+  assert.match(reply, /Do not forward it to public groups/);
 });
 
 test('explains why a visually matching receipt with a different Stripe charge is blocked', () => {

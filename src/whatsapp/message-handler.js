@@ -5,6 +5,7 @@ const {
   formatOcrReply,
   formatDuplicateReply,
   formatVerificationFailureReply,
+  formatPrivateStripeCandidateReview,
 } = require('./reply-formatter');
 const { getImageCaption, getStandaloneTextEmail, normalizeCaptionEmail } = require('./caption-email');
 const { createIdempotencyStore } = require('./idempotency-store');
@@ -149,6 +150,30 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
     } catch (error) {
       logger.warn({ duplicateProcessingId, err: error }, 'Unable to annotate original screenshot for duplicate');
     }
+  };
+
+  const privateReviewReasonCodes = new Set([
+    'MULTIPLE_EXACT_MATCHES',
+    'MULTIPLE_IDENTITY_RECOVERY_MATCHES',
+    'MULTIPLE_TRANSACTION_ID_MATCHES',
+  ]);
+  const notifyPrivateStripeReview = async (result, processingId) => {
+    const adminJids = Array.isArray(config.PAYMENT_REVIEW_ADMIN_JIDS)
+      ? config.PAYMENT_REVIEW_ADMIN_JIDS
+      : [];
+    const reasonCode = result?.verification?.reason_code;
+    if (!config.BOT_REPLY_ENABLED || !adminJids.length || !privateReviewReasonCodes.has(reasonCode)) return;
+
+    const text = formatPrivateStripeCandidateReview(result, processingId);
+    await Promise.all(adminJids.map(async jid => {
+      try {
+        await getSock().sendMessage(jid, { text });
+      } catch (error) {
+        // A private proof delivery failure must not change the financial
+        // verdict or cause a retry that could duplicate a WhatsApp response.
+        logger.warn({ processingId, adminCount: adminJids.length, err: error }, 'Unable to send private Stripe review proof');
+      }
+    }));
   };
 
   const resolveGroupName = dependencies.getGroupName || (async groupId => {
@@ -410,6 +435,7 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
         await sendReaction(groupId, message, '✅');
       } else {
         const verdict = finalResult?.verification?.verdict;
+        await notifyPrivateStripeReview(finalResult, job.processing_id);
         if (config.BOT_REPLY_ENABLED && verdict !== 'VALID') {
           await currentSock.sendMessage(groupId, {
             text: formatVerificationFailureReply(finalResult, job.processing_id),

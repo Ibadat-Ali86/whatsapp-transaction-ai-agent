@@ -358,6 +358,70 @@ test('uses a review reaction and justification for an unresolved payment', async
   assert.deepEqual(replies[1], { react: { text: '⚠️', key: message.key } });
 });
 
+test('sends complete multi-match proof only to configured private admins', async () => {
+  const sent = [];
+  const adminJid = '923001234567@s.whatsapp.net';
+  const sock = {
+    sendMessage: async (jid, content) => { sent.push({ jid, content }); },
+  };
+  const handler = createMessageHandler(sock, {
+    ALLOWED_GROUP_JIDS: ['1234567890-1234567890@g.us'],
+    BOT_REPLY_ENABLED: true,
+    BOT_REACTIONS_ENABLED: true,
+    REQUIRE_EMAIL_CAPTION: false,
+    PAYMENT_REVIEW_ADMIN_JIDS: [adminJid],
+    N8N_ENABLED: false,
+  }, logger, {
+    duplicateStore: duplicateStore(),
+    downloadImage: async () => ({ imageBytes: Buffer.from('private-review-image'), mimeType: 'image/png', tempPath: null }),
+    processImageOCR: async () => ({
+      fields: { amount_cents: 500, payment_date: '2026-09-21' },
+      verification: {
+        verdict: 'UNCLEAR',
+        reason_code: 'MULTIPLE_EXACT_MATCHES',
+        candidate_count: 2,
+        candidate_transactions: [
+          {
+            stripe_charge_id: 'ch_recent_full',
+            stripe_customer_id: 'cus_recent_full',
+            amount_cents: 500,
+            currency: 'usd',
+            payment_date: '2026-09-21',
+            payment_time: '04:53',
+            customer_email: 'alexis@example.com',
+            status: 'Completed',
+            payment_method_type: 'cashapp',
+          },
+          {
+            stripe_charge_id: 'ch_older_full',
+            amount_cents: 500,
+            currency: 'usd',
+            payment_date: '2026-09-19',
+            payment_time: '19:42',
+            customer_email: 'alexis@example.com',
+            status: 'Completed',
+            payment_method_type: 'cashapp',
+          },
+        ],
+      },
+    }),
+  });
+
+  const message = imageMessage('1234567890-1234567890@g.us');
+  await handler({ messages: [message] });
+
+  const privateProof = sent.find(event => event.jid === adminJid);
+  const groupReply = sent.find(event => event.jid === message.key.remoteJid && event.content?.text);
+  assert.ok(privateProof);
+  assert.match(privateProof.content.text, /alexis@example\.com/);
+  assert.match(privateProof.content.text, /ch_recent_full/);
+  assert.match(privateProof.content.text, /ch_older_full/);
+  assert.match(privateProof.content.text, /Do not forward it to public groups/);
+  assert.ok(groupReply);
+  assert.doesNotMatch(groupReply.content.text, /alexis@example\.com/);
+  assert.doesNotMatch(groupReply.content.text, /ch_recent_full/);
+});
+
 test('routes a captioned image through n8n when enabled', async () => {
   let workflowPayload;
   const sock = { sendMessage: async () => {} };

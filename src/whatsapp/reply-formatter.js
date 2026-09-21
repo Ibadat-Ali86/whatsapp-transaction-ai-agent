@@ -170,6 +170,46 @@ function formatStripeCandidateReview(verification, ocrResult = {}) {
   return report;
 }
 
+function formatPrivateStripeCandidateReview(ocrResult, processingId) {
+  const verification = ocrResult?.verification || {};
+  const candidates = Array.isArray(verification.candidate_transactions)
+    ? verification.candidate_transactions.filter(candidate => candidate && typeof candidate === 'object')
+    : [];
+  const formatValue = value => value == null || value === ''
+    ? 'Not available'
+    : String(value).replace(/\s+/g, ' ').slice(0, 300);
+  const formatAmount = candidate => Number.isInteger(candidate?.amount_cents)
+    ? `${(candidate.amount_cents / 100).toFixed(2)} ${formatValue(candidate.currency || 'USD').toUpperCase()}`
+    : 'Not available';
+
+  let report = `🔒 *Private Stripe Payment Review*\n📋 Processing ID: ${formatValue(processingId)}\n`;
+  report += `🧾 Verification reason: ${formatValue(verification.reason_code)}\n`;
+  report += `📊 Eligible candidates: ${Number.isInteger(verification.candidate_count) ? verification.candidate_count : candidates.length}\n`;
+  report += '⚠️ No candidate was approved automatically. Full candidate evidence is provided here for the authorized client/admin.\n';
+
+  if (!candidates.length) {
+    return `${report}\nStripe returned no sanitized candidate records. Review the Stripe dashboard privately.`;
+  }
+
+  candidates.forEach((candidate, index) => {
+    const paymentDate = candidate.payment_date || 'Not available';
+    const paymentTime = candidate.payment_time || 'time unavailable';
+    report += `\n🔹 *Candidate ${index + 1}${index === 0 ? ' — Most Recent' : ''}*\n`;
+    report += `💰 Amount: ${formatAmount(candidate)}\n`;
+    report += `✅ Status: ${formatValue(candidate.status)}\n`;
+    report += `🕒 Stripe Time: ${formatValue(paymentDate)} ${formatValue(paymentTime)}\n`;
+    report += `👤 Customer: ${formatValue(candidate.customer_name)}\n`;
+    report += `📧 Email: ${formatValue(candidate.customer_email)}\n`;
+    report += `🆔 Stripe Customer: ${formatValue(candidate.stripe_customer_id)}\n`;
+    report += `💳 Method: ${formatValue(candidate.payment_method_type)}\n`;
+    report += `📝 Description: ${formatValue(candidate.description)}\n`;
+    report += `🔗 Stripe Charge: ${formatValue(candidate.stripe_charge_id)}\n`;
+  });
+
+  report += '\n🔐 This private message contains payment identity data. Do not forward it to public groups.';
+  return report;
+}
+
 /**
  * Formats a non-approving verification result. The reaction is deliberately
  * paired with an explanation so a failed lookup is not mistaken for an
@@ -279,6 +319,7 @@ function formatErrorReply(processingId) {
 module.exports = {
   formatOcrReply,
   formatStripeCandidateReview,
+  formatPrivateStripeCandidateReview,
   formatDuplicateReply,
   formatVerificationFailureReply,
   formatErrorReply,

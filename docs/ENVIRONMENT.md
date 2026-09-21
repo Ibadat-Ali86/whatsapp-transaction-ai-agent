@@ -73,6 +73,12 @@ WHATSAPP_ALLOWED_GROUP_JIDS=1234567890-1234567890@g.us,1234567890-9876543210@g.u
   sharing the same Baileys auth state and processing queue. Keep one bot
   instance per auth directory; a stale marker is recovered automatically when
   its recorded PID is no longer running.
+- `PAYMENT_REVIEW_ADMIN_JIDS` is an optional comma-separated list of direct
+  WhatsApp JIDs such as `923001234567@s.whatsapp.net` or `...@lid`. For
+  ambiguous Stripe matches, the bot sends the complete sanitized candidate
+  proof, including unmasked Stripe email and IDs, only to these private
+  recipients. Group replies remain privacy-safe and review-only. Group JIDs
+  are rejected by configuration validation.
 
 ## Stripe read-only verification
 
@@ -141,7 +147,9 @@ WhatsApp reply shows only the newest candidate as review context and keeps the
 full count; it does not approve that candidate automatically. If receipt date
 or month/day evidence exists, historical email/amount fallbacks cannot ignore
 it. The bot approves only one uniquely proven charge, including a bounded
-timezone-boundary match with strong identity evidence.
+timezone-boundary match with strong identity evidence. The full sanitized
+candidate set is sent only to `PAYMENT_REVIEW_ADMIN_JIDS`; there is no safe
+automatic approval when multiple fresh candidates remain.
 
 ## Duplicate detection
 

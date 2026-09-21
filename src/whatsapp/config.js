@@ -1,10 +1,11 @@
 require('dotenv').config();
-const { parseAllowedGroupJids } = require('./group-access');
+const { parseAllowedGroupJids, parsePrivateReviewJids } = require('./group-access');
 
 const allowedGroupJids = parseAllowedGroupJids(
   process.env.WHATSAPP_ALLOWED_GROUP_JIDS,
   process.env.WHATSAPP_TEST_GROUP_JID
 );
+const privateReviewJids = parsePrivateReviewJids(process.env.PAYMENT_REVIEW_ADMIN_JIDS);
 
 const parseInteger = (value, fallback) => {
   const parsed = Number.parseInt(value, 10);
@@ -30,6 +31,7 @@ const config = {
   STRIPE_TIMEZONE: process.env.STRIPE_TIMEZONE || 'UTC',
   REQUIRE_EMAIL_CAPTION: process.env.REQUIRE_EMAIL_CAPTION !== 'false',
   ALLOWED_GROUP_JIDS: allowedGroupJids,
+  PAYMENT_REVIEW_ADMIN_JIDS: privateReviewJids,
   WHATSAPP_TEST_GROUP_JID: process.env.WHATSAPP_TEST_GROUP_JID || '',
   LOG_LEVEL: process.env.LOG_LEVEL || 'info',
   BOT_LOCK_PATH: process.env.BOT_LOCK_PATH || 'data/whatsapp-bot.lock',
