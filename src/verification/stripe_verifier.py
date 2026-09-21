@@ -679,6 +679,7 @@ class StripeVerifier:
             if isinstance(cashapp, dict):
                 add(cashapp.get("transaction_id"))
                 add(cashapp.get("payment_id"))
+                add(cashapp.get("reference"))
 
         metadata = charge.get("metadata")
         if isinstance(metadata, dict):
@@ -686,6 +687,27 @@ class StripeVerifier:
                 if str(key).casefold() in TRANSACTION_METADATA_KEYS:
                     add(value)
         return values
+
+    @staticmethod
+    def _charge_payment_identifier(charge: dict[str, Any]) -> Optional[str]:
+        """Return the provider payment identifier, when Stripe exposes one.
+
+        Cash App's transaction identifier is distinct from Stripe's charge and
+        PaymentIntent IDs. Keep this field separate in the sanitized response
+        so operators can prove which receipt identifier was reconciled without
+        guessing from an unrelated Stripe object ID.
+        """
+        payment_method_details = charge.get("payment_method_details")
+        if not isinstance(payment_method_details, dict):
+            return None
+        cashapp = payment_method_details.get("cashapp")
+        if not isinstance(cashapp, dict):
+            return None
+        for key in ("transaction_id", "payment_id", "reference"):
+            value = cashapp.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return None
 
     @classmethod
     def _transaction_id_matches(cls, charge: dict[str, Any], evidence: PaymentEvidence) -> bool:
@@ -789,6 +811,7 @@ class StripeVerifier:
             "payment_time": local_created.strftime("%H:%M"),
             "customer_name": customer_name,
             "customer_email": customer_email,
+            "payment_identifier": StripeVerifier._charge_payment_identifier(charge),
             "description": charge.get("description") if isinstance(charge.get("description"), str) else None,
             "status": "Completed" if charge.get("paid") is True and charge.get("status") == "succeeded" else charge.get("status"),
             "payment_method_type": payment_method_type,
@@ -1382,6 +1405,31 @@ class StripeVerifier:
                     charges,
                     include_time_constraints=True,
                     match_hour=bool(self.screenshot_timezone),
+                )
+            if not transaction_matches and evidence.transaction_id:
+                # Stripe Search is eventually consistent and a narrow amount /
+                # date query can omit the charge even while the dashboard and
+                # the legacy list endpoint already expose it. Search the
+                # bounded lookback once more by the exact provider identifier.
+                # The local matcher still requires amount, succeeded status,
+                # currency, and the configured payment method; the identifier
+                # never authorizes an unrelated charge.
+                recovery_charges = await self._charges_for_lookback(client)
+                merged_charges = {
+                    charge.get("id"): charge
+                    for charge in charges
+                    if charge.get("id")
+                }
+                merged_charges.update({
+                    charge.get("id"): charge
+                    for charge in recovery_charges
+                    if charge.get("id")
+                })
+                charges = list(merged_charges.values())
+                transaction_matches = transaction_matches_for(
+                    charges,
+                    include_time_constraints=False,
+                    match_hour=False,
                 )
             if not transaction_matches and evidence.transaction_id:
                 # The provider identifier is unique evidence. Relax only the

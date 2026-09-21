@@ -21,6 +21,63 @@ function maskIdentifier(value) {
   return `${prefix}…${identifier.slice(-6)}`;
 }
 
+function safeEvidenceValue(value, fallback = 'Not available') {
+  if (value == null || value === '') return fallback;
+  return String(value).replace(/\s+/g, ' ').trim().slice(0, 160) || fallback;
+}
+
+function formatReceiptEvidence(ocrResult) {
+  const fields = ocrResult?.fields || {};
+  const amount = Number.isInteger(fields.amount_cents)
+    ? `$${(fields.amount_cents / 100).toFixed(2)}`
+    : fields.amount != null ? `$${safeEvidenceValue(fields.amount)}` : 'Not extracted';
+  const date = fields.payment_date
+    || (fields.payment_month && fields.payment_day
+      ? `${String(fields.payment_month).padStart(2, '0')}-${String(fields.payment_day).padStart(2, '0')}`
+      : 'Not extracted');
+  const hasTime = fields.payment_hour != null && fields.minutes != null;
+  const time = hasTime
+    ? `${String(fields.payment_hour).padStart(2, '0')}:${String(fields.minutes).padStart(2, '0')}`
+    : 'Not extracted';
+  const email = fields.email ? maskEmail(fields.email) : 'Not extracted';
+  const transactionId = fields.transaction_id
+    ? safeEvidenceValue(fields.transaction_id)
+    : 'Not extracted';
+  const description = fields.description
+    ? safeEvidenceValue(fields.description)
+    : 'Not present in the screenshot';
+
+  return `\n🧾 *Receipt evidence received*\n💰 Amount: ${amount}\n📅 Receipt date: ${date}\n🕒 Receipt time: ${time}\n👤 Customer name: ${safeEvidenceValue(fields.customer_name, 'Not extracted')}\n📧 Receipt email: ${email}\n🆔 Payment identifier: ${transactionId}\n📝 Receipt description: ${description}`;
+}
+
+function formatReviewJustification(ocrResult, verification) {
+  const fields = ocrResult?.fields || {};
+  const reason = verification?.reason_code || '';
+  const candidateCount = Number.isInteger(verification?.candidate_count)
+    ? verification.candidate_count
+    : null;
+  const identifier = fields.transaction_id ? safeEvidenceValue(fields.transaction_id) : null;
+
+  if (identifier && (
+    reason === 'MULTIPLE_EXACT_MATCHES'
+    || reason === 'MULTIPLE_IDENTITY_RECOVERY_MATCHES'
+    || reason === 'MULTIPLE_TRANSACTION_ID_MATCHES'
+    || reason === 'NO_EXACT_MATCH'
+  )) {
+    return `🔎 *Why review:* The receipt supplied payment identifier ${identifier}, but it did not resolve to exactly one eligible succeeded Stripe Cash App charge in the bounded reconciliation search${candidateCount != null ? ` (${candidateCount} eligible candidate${candidateCount === 1 ? '' : 's'} remained)` : ''}. A visible screenshot field is not treated as proof until Stripe confirms it. The bot did not choose the newest record arbitrarily.`;
+  }
+  if (reason === 'MULTIPLE_EXACT_MATCHES' || reason === 'MULTIPLE_IDENTITY_RECOVERY_MATCHES') {
+    return '🔎 *Why review:* Amount, status, method, and available date/time/identity evidence matched more than one Stripe charge. Recency alone is not proof of which payment this screenshot represents, so no candidate was approved.';
+  }
+  if (reason === 'MULTIPLE_TRANSACTION_ID_MATCHES') {
+    return '🔎 *Why review:* The provider identifier was associated with multiple eligible Stripe records. Because the identifier was not unique, no record was selected.';
+  }
+  if (reason === 'NO_EXACT_MATCH') {
+    return '🔎 *Why review:* Stripe did not return one eligible succeeded Cash App charge satisfying the available amount, status, method, and receipt identity/time constraints. A visible screenshot field is not treated as proof until Stripe confirms it.';
+  }
+  return '🔎 *Why review:* The available evidence did not identify exactly one eligible Stripe charge, so the bot kept the result review-required instead of guessing or approving an unproven payment.';
+}
+
 function formatOcrReply(ocrResult, processingId, captionEmail = null) {
   // The OCR API returns extracted values under `fields`. Accepting the
   // legacy top-level shape as well keeps this formatter backward-compatible.
@@ -48,6 +105,7 @@ function formatOcrReply(ocrResult, processingId, captionEmail = null) {
   const status = stripeTransaction.status || fields.status || 'Not found';
   const currency = stripeTransaction.currency || 'Not available';
   const paymentMethod = stripeTransaction.payment_method_type || 'Not available';
+  const paymentIdentifier = stripeTransaction.payment_identifier || fields.transaction_id;
   const stripeCustomerId = stripeTransaction.stripe_customer_id;
   const confidence = ocrResult?.confidence != null ? Math.round(ocrResult.confidence * 100) : 0;
   const provider = ocrResult?.provider || 'tesseract';
@@ -82,6 +140,9 @@ function formatOcrReply(ocrResult, processingId, captionEmail = null) {
   reply += `✅ Status: ${status}\n`;
   reply += `💱 Currency: ${currency}\n`;
   reply += `💳 Payment method: ${paymentMethod}\n`;
+  if (paymentIdentifier) {
+    reply += `🔢 Payment identifier: ${paymentIdentifier}\n`;
+  }
   if (stripeCustomerId) {
     reply += `🆔 Stripe Customer (masked): ${maskIdentifier(stripeCustomerId)}\n`;
   }
@@ -162,6 +223,7 @@ function formatStripeCandidateReview(verification, ocrResult = {}) {
     report += `👤 Customer: ${formatValue(candidate.customer_name)}\n`;
     report += `📧 Email (masked): ${candidate.customer_email ? maskEmail(candidate.customer_email) : 'Not available'}\n`;
     report += `🆔 Stripe Customer: ${candidate.stripe_customer_id ? maskIdentifier(candidate.stripe_customer_id) : 'Not available'}\n`;
+    report += `🔢 Payment identifier: ${candidate.payment_identifier ? maskIdentifier(candidate.payment_identifier) : 'Not available'}\n`;
     report += `💳 Method: ${formatValue(candidate.payment_method_type)}\n`;
     report += `📝 Description: ${formatValue(candidate.description)}\n`;
     report += `🔗 Stripe Charge: ${candidate.stripe_charge_id ? maskIdentifier(candidate.stripe_charge_id) : 'Not available'}\n`;
@@ -201,6 +263,7 @@ function formatPrivateStripeCandidateReview(ocrResult, processingId) {
     report += `👤 Customer: ${formatValue(candidate.customer_name)}\n`;
     report += `📧 Email: ${formatValue(candidate.customer_email)}\n`;
     report += `🆔 Stripe Customer: ${formatValue(candidate.stripe_customer_id)}\n`;
+    report += `🔢 Payment identifier: ${formatValue(candidate.payment_identifier)}\n`;
     report += `💳 Method: ${formatValue(candidate.payment_method_type)}\n`;
     report += `📝 Description: ${formatValue(candidate.description)}\n`;
     report += `🔗 Stripe Charge: ${formatValue(candidate.stripe_charge_id)}\n`;
@@ -254,7 +317,9 @@ function formatVerificationFailureReply(ocrResult, processingId) {
     || reason === 'MULTIPLE_TRANSACTION_ID_MATCHES'
     ? formatStripeCandidateReview(verification, ocrResult)
     : '';
-  return `${heading}\n📋 Processing ID: ${processingId}\n\n${reasonText}\n🧾 Verification reason: ${reason}\n📊 Stripe candidates reviewed: ${candidateCount ?? 'not available'}${sameImageNote}${imageConflictNote}${candidateReport}\n${conclusion}`;
+  const evidence = formatReceiptEvidence(ocrResult);
+  const justification = formatReviewJustification(ocrResult, verification);
+  return `${heading}\n📋 Processing ID: ${processingId}\n\n${reasonText}\n🧾 Verification reason: ${reason}\n📊 Stripe candidates reviewed: ${candidateCount ?? 'not available'}\n${evidence}\n\n${justification}${sameImageNote}${imageConflictNote}${candidateReport}\n${conclusion}`;
 }
 
 /**

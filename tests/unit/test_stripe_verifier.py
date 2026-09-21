@@ -537,6 +537,78 @@ async def test_transaction_id_recovers_charge_when_caption_email_is_wrong():
 
 
 @pytest.mark.asyncio
+async def test_cash_app_payment_identifier_selects_one_charge_from_nested_stripe_details():
+    def responses(request):
+        if request.url.path == "/v1/customers":
+            return httpx.Response(200, json={"data": [], "has_more": False})
+        assert request.url.path == "/v1/charges/search"
+        return httpx.Response(200, json={
+            "data": [charge(
+                "ch_cashapp_identifier",
+                customer=None,
+                receipt_email="actual@example.com",
+                payment_method_details={
+                    "type": "cashapp",
+                    "cashapp": {"transaction_id": "R6J4AXTXR"},
+                },
+            )],
+            "has_more": False,
+        })
+
+    result, _ = await verify_with_responses(
+        responses,
+        evidence_value=evidence(
+            email="wrong@example.com",
+            transaction_id="R6J4AXTXR",
+        ),
+    )
+
+    assert result.verdict == "VALID"
+    assert result.reason_code == "TRANSACTION_ID_MATCH"
+    assert result.stripe_charge_id == "ch_cashapp_identifier"
+    assert result.matched_transaction["payment_identifier"] == "R6J4AXTXR"
+
+
+@pytest.mark.asyncio
+async def test_transaction_id_recovery_checks_bounded_list_when_search_candidates_omit_charge():
+    def responses(request):
+        if request.url.path == "/v1/customers":
+            return httpx.Response(200, json={"data": [], "has_more": False})
+        if request.url.path == "/v1/charges/search":
+            return httpx.Response(200, json={
+                "data": [charge("ch_unrelated", customer=None)],
+                "has_more": False,
+            })
+        assert request.url.path == "/v1/charges"
+        assert "created[gte]" in request.url.params
+        return httpx.Response(200, json={
+            "data": [charge(
+                "ch_recovered_identifier",
+                customer=None,
+                receipt_email="actual@example.com",
+                payment_method_details={
+                    "type": "cashapp",
+                    "cashapp": {"transaction_id": "R6J4AXTXR"},
+                },
+            )],
+            "has_more": False,
+        })
+
+    result, requests = await verify_with_responses(
+        responses,
+        evidence_value=evidence(
+            email=None,
+            transaction_id="R6J4AXTXR",
+        ),
+    )
+
+    assert result.verdict == "VALID"
+    assert result.reason_code == "TRANSACTION_ID_MATCH"
+    assert result.stripe_charge_id == "ch_recovered_identifier"
+    assert any(request.url.path == "/v1/charges" for request in requests)
+
+
+@pytest.mark.asyncio
 async def test_transaction_id_disambiguates_same_amount_and_time_charges():
     def responses(request):
         assert request.url.path == "/v1/charges/search"

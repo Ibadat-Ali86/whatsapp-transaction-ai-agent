@@ -79,6 +79,17 @@ class FieldExtractor:
 
             lines = raw_text.splitlines()
             label_line = raw_text.count('\n', 0, label_match.start())
+            line_end = raw_text.find('\n', label_match.end())
+            if line_end == -1:
+                line_end = len(raw_text)
+            same_line_tokens = re.findall(
+                r'[A-Za-z0-9][A-Za-z0-9_-]{3,127}',
+                raw_text[label_match.end():line_end],
+            )
+            for candidate in same_line_tokens:
+                if token_pattern.fullmatch(candidate) and any(char.isdigit() for char in candidate):
+                    return candidate
+
             nearby_lines = []
             for offset in (1, -1, 2, -2):
                 index = label_line + offset

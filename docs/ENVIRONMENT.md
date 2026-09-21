@@ -96,6 +96,9 @@ STRIPE_SERVICE_TOKEN=
 # explicitly approved production/live-data environment.
 STRIPE_MODE=test
 STRIPE_API_BASE_URL=https://api.stripe.com
+# Cash App receipt identifiers require a Stripe API version that exposes
+# payment_method_details.cashapp.transaction_id (2025-07-30.basil or newer).
+# Leave blank only when the account default is confirmed to expose that field.
 STRIPE_API_VERSION=
 STRIPE_TIMEOUT_SECONDS=15
 # Stripe dashboard/account timestamps are US Central in this deployment.

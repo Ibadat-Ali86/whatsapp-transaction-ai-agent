@@ -53,6 +53,12 @@ class TestTransactionIdExtraction:
         )
         assert fields.transaction_id == "TJ2WHT1Z0"
 
+    def test_extracts_identifier_when_ocr_keeps_label_and_value_on_one_line(self):
+        fields = FieldExtractor.extract_from_text(
+            "Payment identifier R6J4AXTXR\nAmount: $10.00", "test-pid-006-inline"
+        )
+        assert fields.transaction_id == "R6J4AXTXR"
+
     def test_extracts_explicit_description_only(self):
         fields = FieldExtractor.extract_from_text(
             "Description: Order 002\nAmount: $20.00", "test-pid-008"

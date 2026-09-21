@@ -177,6 +177,9 @@ test('formats an ambiguous payment as review-required rather than fake', () => {
   assert.match(reply, /multiple eligible payments/);
   assert.match(reply, /Verification reason: MULTIPLE_EXACT_MATCHES/);
   assert.match(reply, /Stripe candidates reviewed: 2/);
+  assert.match(reply, /Receipt evidence received/);
+  assert.match(reply, /Receipt description: Not present in the screenshot/);
+  assert.match(reply, /Why review/);
   assert.match(reply, /Newest Stripe Candidate \(review context\)/);
   assert.match(reply, /Only the newest of 2 eligible candidate records is shown/);
   assert.match(reply, /Candidate 1 — Most Recent/);
@@ -186,6 +189,30 @@ test('formats an ambiguous payment as review-required rather than fake', () => {
   assert.doesNotMatch(reply, /ch_…evious/);
   assert.match(reply, /No candidate was approved or claimed automatically/);
   assert.match(reply, /not a fraud determination/);
+});
+
+test('explains missing unique proof when a receipt identifier was visible', () => {
+  const reply = formatVerificationFailureReply({
+    fields: {
+      amount_cents: 1000,
+      payment_date: '2026-09-21',
+      minutes: '30',
+      payment_hour: 8,
+      customer_name: 'Juan Flores',
+      transaction_id: 'R6J4AXTXR',
+    },
+    verification: {
+      verdict: 'UNCLEAR',
+      reason_code: 'NO_EXACT_MATCH',
+      candidate_count: 0,
+    },
+  }, 'wa-evidence-review');
+
+  assert.match(reply, /Payment identifier: R6J4AXTXR/);
+  assert.match(reply, /The receipt supplied payment identifier R6J4AXTXR/);
+  assert.match(reply, /did not resolve to exactly one eligible succeeded Stripe Cash App charge/);
+  assert.match(reply, /A visible screenshot field is not treated as proof/);
+  assert.match(reply, /Receipt description: Not present in the screenshot/);
 });
 
 test('formats full candidate proof only for the private admin channel', () => {
