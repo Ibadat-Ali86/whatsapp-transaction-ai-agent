@@ -188,3 +188,47 @@ test('recovers a processing job from disk after a restart', async () => {
   queue.stop();
   fs.unlinkSync(filePath);
 });
+
+test('recovers historical n8n network dead letters after a restart', async () => {
+  const filePath = temporaryPath();
+  fs.writeFileSync(filePath, JSON.stringify({
+    version: 1,
+    sequence: 1,
+    lastGroupId: null,
+    groupOrder: ['group-a'],
+    jobs: {
+      'recovered-n8n-1': {
+        job_id: 'recovered-n8n-1',
+        processing_id: 'recovered-n8n-1',
+        idempotency_key: 'recovered-n8n-1',
+        group_id: 'group-a',
+        status: 'DEAD_LETTER',
+        attempts: 4,
+        sequence: 1,
+        dead_lettered_at: Date.now(),
+        last_error: {
+          name: 'N8nServiceError',
+          code: null,
+          message: 'n8n webhook request failed (network)',
+        },
+      },
+    },
+  }));
+  const queue = createProcessingQueue({
+    filePath,
+    deferRetryableErrors: true,
+    cooldownMs: 0,
+    worker: async () => ({ status: 'COMPLETED', verdict: 'VALID' }),
+    logger: logger(),
+  });
+
+  queue.start();
+  const result = await queue.enqueue({
+    processing_id: 'recovered-n8n-1',
+    idempotency_key: 'recovered-n8n-1',
+    group_id: 'group-a',
+  });
+  assert.equal(result.verdict, 'VALID');
+  queue.stop();
+  fs.unlinkSync(filePath);
+});

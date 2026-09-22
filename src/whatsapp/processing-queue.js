@@ -92,6 +92,15 @@ function createProcessingQueue({
     fs.renameSync(temporaryPath, filePath);
   };
 
+  const isRecoverableN8nDeadLetter = job => {
+    const error = job?.last_error;
+    if (job?.status !== 'DEAD_LETTER' || error?.name !== 'N8nServiceError') return false;
+    return error.code === 'ECONNABORTED'
+      || error.code === 'ETIMEDOUT'
+      || error.code === 'ECONNRESET'
+      || /n8n webhook request failed \(network\)/i.test(error.message || '');
+  };
+
   const load = () => {
     if (!filePath) return;
     try {
@@ -111,6 +120,18 @@ function createProcessingQueue({
           job.status = 'QUEUED';
           job.recovered_at = Date.now();
           recovered = true;
+        }
+        // Older releases converted exhausted n8n transport retries into
+        // DEAD_LETTER. Recover only that known transient failure class on
+        // startup; authentication and malformed-request dead letters remain
+        // terminal instead of creating an infinite loop.
+        if (isRecoverableN8nDeadLetter(job)) {
+          job.status = 'QUEUED';
+          job.available_at = Date.now();
+          job.recovered_from_dead_letter_at = Date.now();
+          delete job.dead_lettered_at;
+          recovered = true;
+          logger.warn({ processingId: job.processing_id }, 'Recovered transient n8n dead letter for retry');
         }
       }
       if (recovered) persist();
