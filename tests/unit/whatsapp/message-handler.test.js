@@ -177,6 +177,49 @@ test('processes a captionless image so Stripe can recover identity from OCR evid
   assert.deepEqual(events[1], { react: { text: '✅', key: imageMessage('1234567890-1234567890@g.us').key } });
 });
 
+test('processes a forwarded view-once image wrapped by WhatsApp', async () => {
+  const events = [];
+  const groupId = '1234567890-1234567890@g.us';
+  const message = {
+    key: {
+      remoteJid: groupId,
+      participant: '923000000000@s.whatsapp.net',
+      fromMe: false,
+      id: 'wrapped-view-once-image',
+    },
+    message: {
+      viewOnceMessageV2: {
+        message: {
+          imageMessage: {
+            mimetype: 'image/jpeg',
+            caption: 'Trees7204@gmail.com',
+            contextInfo: { isForwarded: true },
+          },
+        },
+      },
+    },
+  };
+  const handler = createMessageHandler({
+    sendMessage: async (_jid, content) => events.push(content),
+  }, {
+    ALLOWED_GROUP_JIDS: [groupId],
+    BOT_REPLY_ENABLED: false,
+    BOT_REACTIONS_ENABLED: true,
+    N8N_ENABLED: false,
+  }, logger, {
+    duplicateStore: duplicateStore(),
+    downloadImage: async () => ({ imageBytes: Buffer.from('wrapped-view-once'), mimeType: 'image/jpeg', tempPath: null }),
+    processImageOCR: async params => {
+      assert.equal(params.captionEmail, 'trees7204@gmail.com');
+      return { fields: { amount_cents: 700 }, verification: { verdict: 'VALID', stripe_charge_id: 'ch-wrapped-view-once' } };
+    },
+  });
+
+  await handler({ messages: [message] });
+
+  assert.deepEqual(events, [{ react: { text: '✅', key: message.key } }]);
+});
+
 test('associates a same-sender email message that follows a captionless image', async () => {
   let lookupEmail;
   const groupId = '1234567890-1234567890@g.us';

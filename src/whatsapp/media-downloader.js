@@ -3,6 +3,7 @@ const fs = require('fs').promises;
 const path = require('path');
 const config = require('./config');
 const { logger } = require('./logger');
+const { getImageMessage, getImageMimeType } = require('./message-media');
 
 class MediaDownloadError extends Error {
   constructor(message, retryable = false) {
@@ -27,13 +28,14 @@ function wait(ms) {
  * @returns {Promise<{imageBytes: Buffer, mimeType: string, tempPath: string}>}
  */
 async function downloadImage(sock, message, processingId) {
-  const mimeType = message.message?.imageMessage?.mimetype || message.message?.extendedTextMessage?.contextInfo?.quotedMessage?.imageMessage?.mimetype || '';
+  const mediaMessage = getImageMessage(message);
+  const mimeType = getImageMimeType(message);
   
   if (!['image/jpeg', 'image/png', 'image/webp'].includes(mimeType)) {
     throw new MediaDownloadError(`Invalid mime type: ${mimeType}`);
   }
 
-  const fileLength = message.message?.imageMessage?.fileLength || message.message?.extendedTextMessage?.contextInfo?.quotedMessage?.imageMessage?.fileLength || 0;
+  const fileLength = mediaMessage?.fileLength || 0;
   
   if (fileLength > config.MAX_IMAGE_SIZE_MB * 1024 * 1024) {
     throw new MediaDownloadError(`File size exceeds maximum allowed (${config.MAX_IMAGE_SIZE_MB}MB)`);

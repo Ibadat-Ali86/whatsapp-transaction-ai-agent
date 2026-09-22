@@ -1,8 +1,10 @@
 const EMAIL_PATTERN = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/;
 const EMAIL_TOKEN_PATTERN = /[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+/g;
+const { getImageMessage } = require('./message-media');
 
 function getImageCaption(message) {
-  return message?.message?.imageMessage?.caption
+  const imageMessage = getImageMessage(message);
+  return imageMessage?.caption
     || message?.message?.extendedTextMessage?.contextInfo?.quotedMessage?.imageMessage?.caption
     || '';
 }

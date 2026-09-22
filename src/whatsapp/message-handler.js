@@ -15,6 +15,7 @@ const crypto = require('crypto');
 const { isAllowedGroupJid, hashGroupJid } = require('./group-access');
 const { createDuplicateStore } = require('./duplicate-store');
 const { createProcessingQueue, QueueFullError } = require('./processing-queue');
+const { getImageMessage, getImageMimeType } = require('./message-media');
 
 /**
  * Orchestrates WhatsApp intake and delegates expensive work to a durable,
@@ -529,7 +530,8 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
           return;
         }
         if (!msg.message || msg.key?.fromMe) return;
-        const isImage = !!(msg.message.imageMessage || msg.message.extendedTextMessage?.contextInfo?.quotedMessage?.imageMessage);
+        const imageMessage = getImageMessage(msg);
+        const isImage = Boolean(imageMessage && getImageMimeType(msg));
         if (!isImage) return;
 
         const messageId = msg.key?.id;
@@ -560,7 +562,7 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
         const processingId = generateProcessingId();
         const senderJid = senderKey(msg) || msg.key.remoteJid;
         const hashedJid = crypto.createHash('sha256').update(senderJid).digest('hex').substring(0, 10);
-        const mimeType = msg.message.imageMessage?.mimetype || msg.message.extendedTextMessage?.contextInfo?.quotedMessage?.imageMessage?.mimetype || 'unknown';
+        const mimeType = getImageMimeType(msg) || 'unknown';
         logger.info({ processingId, messageId, groupIdHash: hashGroupJid(groupId), senderJid: hashedJid, mimeType, queueDepth: queue.pendingCount }, 'Incoming image queued');
 
         const job = {
@@ -573,7 +575,7 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
           group_name: groupName,
           sender_jid: senderJid,
           received_at: new Date().toISOString(),
-          is_forwarded: Boolean(msg.message?.imageMessage?.contextInfo?.isForwarded),
+          is_forwarded: Boolean(imageMessage?.contextInfo?.isForwarded),
           caption_email: effectiveCaptionEmail,
         };
 
