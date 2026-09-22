@@ -179,7 +179,17 @@ function createProcessingQueue({
       if (job.status !== 'QUEUED' || (job.available_at || 0) > Date.now()) continue;
       const groupId = job.group_id || '__unknown__';
       const current = groups.get(groupId);
-      if (!current || job.sequence < current.sequence) groups.set(groupId, job);
+      // Historical dead letters can be recovered after a deployment. They
+      // must not block a fresh payment from the same single group while the
+      // backlog drains. Keep recovered work durable, but prefer a live job
+      // over recovered historical work within the same group.
+      const jobPriority = job.recovered_from_dead_letter_at ? 1 : 0;
+      const currentPriority = current?.recovered_from_dead_letter_at ? 1 : 0;
+      if (!current
+        || jobPriority < currentPriority
+        || (jobPriority === currentPriority && job.sequence < current.sequence)) {
+        groups.set(groupId, job);
+      }
     }
     return [...groups.entries()].sort(([, left], [, right]) => left.sequence - right.sequence);
   };

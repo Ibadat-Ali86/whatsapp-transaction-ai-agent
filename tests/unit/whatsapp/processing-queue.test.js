@@ -232,3 +232,57 @@ test('recovers historical n8n network dead letters after a restart', async () =>
   queue.stop();
   fs.unlinkSync(filePath);
 });
+
+test('prioritizes fresh work over recovered historical work in the same group', async () => {
+  const filePath = temporaryPath();
+  fs.writeFileSync(filePath, JSON.stringify({
+    version: 1,
+    sequence: 2,
+    lastGroupId: null,
+    groupOrder: ['group-a'],
+    jobs: {
+      old: {
+        job_id: 'old',
+        processing_id: 'old',
+        idempotency_key: 'old',
+        group_id: 'group-a',
+        status: 'QUEUED',
+        attempts: 4,
+        sequence: 1,
+        available_at: Date.now(),
+        queued_at: Date.now() - 60000,
+        recovered_from_dead_letter_at: Date.now() - 30000,
+      },
+      fresh: {
+        job_id: 'fresh',
+        processing_id: 'fresh',
+        idempotency_key: 'fresh',
+        group_id: 'group-a',
+        status: 'QUEUED',
+        attempts: 0,
+        sequence: 2,
+        available_at: Date.now(),
+        queued_at: Date.now(),
+      },
+    },
+  }));
+  const processed = [];
+  const queue = createProcessingQueue({
+    filePath,
+    concurrency: 1,
+    cooldownMs: 0,
+    worker: async job => {
+      processed.push(job.processing_id);
+      return { status: 'COMPLETED' };
+    },
+    logger: logger(),
+  });
+  queue.stop();
+  const oldResult = queue.enqueue({ processing_id: 'old', idempotency_key: 'old', group_id: 'group-a' });
+  const freshResult = queue.enqueue({ processing_id: 'fresh', idempotency_key: 'fresh', group_id: 'group-a' });
+  queue.start();
+  await Promise.all([oldResult, freshResult]);
+  assert.deepEqual(processed, ['fresh', 'old']);
+  queue.stop();
+  fs.unlinkSync(filePath);
+});
