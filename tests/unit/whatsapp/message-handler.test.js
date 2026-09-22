@@ -497,6 +497,41 @@ test('routes a captioned image through n8n when enabled', async () => {
   assert.equal(workflowPayload.image.mime_type, 'image/png');
 });
 
+test('does not turn a valid payment into a failure when WhatsApp notification delivery fails', async () => {
+  const sent = [];
+  const attemptedReactions = [];
+  const sock = {
+    sendMessage: async (_jid, content) => {
+      if (content.react) {
+        attemptedReactions.push(content.react.text);
+        throw new Error('reaction delivery unavailable');
+      }
+      sent.push(content);
+    },
+  };
+  const handler = createMessageHandler(sock, {
+    ALLOWED_GROUP_JIDS: ['1234567890-1234567890@g.us'],
+    BOT_REPLY_ENABLED: true,
+    BOT_REACTIONS_ENABLED: true,
+    N8N_ENABLED: true,
+    STRIPE_VERIFICATION_ENABLED: true,
+  }, logger, {
+    duplicateStore: duplicateStore(),
+    downloadImage: async () => ({ imageBytes: Buffer.from('valid-n8n-image'), mimeType: 'image/png', tempPath: null }),
+    processImageViaN8n: async () => ({
+      provider: 'tesseract',
+      fields: { amount_cents: 1000, email: 'customer@example.com' },
+      verification: { verdict: 'VALID', status: 'CONFIRMED', stripe_charge_id: 'ch-valid-notification-test' },
+    }),
+  });
+
+  const message = captionedImageMessage('1234567890-1234567890@g.us', 'valid-notification-failure');
+  await handler({ messages: [message] });
+
+  assert.equal(sent.some(content => /Payment Not Confirmed|Payment Requires Review/.test(content.text || '')), false);
+  assert.deepEqual(attemptedReactions, ['✅']);
+});
+
 test('marks an exact screenshot resend as a duplicate across groups', async () => {
   const replies = [];
   const sent = [];

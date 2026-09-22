@@ -414,12 +414,16 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
 
       if (finalResult?.verification?.verdict === 'DUPLICATE') {
         if (config.BOT_REPLY_ENABLED) {
-          await currentSock.sendMessage(groupId, {
-            text: formatDuplicateReply(finalResult, job.processing_id, {
-              groupScope: finalResult.verification.duplicate_scope,
-              originalGroupName: finalResult.verification.duplicate_group_name,
-            }),
-          }, { quoted: message });
+          try {
+            await currentSock.sendMessage(groupId, {
+              text: formatDuplicateReply(finalResult, job.processing_id, {
+                groupScope: finalResult.verification.duplicate_scope,
+                originalGroupName: finalResult.verification.duplicate_group_name,
+              }),
+            }, { quoted: message });
+          } catch (notificationError) {
+            logger.error({ processingId: job.processing_id, err: notificationError }, 'Unable to send duplicate verification message');
+          }
         }
         await notifyOriginalDuplicate(duplicateRecord, job.processing_id);
       } else if (finalResult?.verification?.verdict === 'VALID') {
@@ -429,25 +433,45 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
         const identityWasRecovered = verification.reason_code === 'IDENTITY_RECOVERED_FROM_STRIPE'
           || (canonicalEmail && captionEmail && canonicalEmail.toLowerCase() !== captionEmail);
         if (config.BOT_REPLY_ENABLED && (!job.caption_email || identityWasRecovered)) {
-          await currentSock.sendMessage(groupId, {
-            text: formatOcrReply(finalResult, job.processing_id, job.caption_email || null),
-          }, { quoted: message });
+          try {
+            await currentSock.sendMessage(groupId, {
+              text: formatOcrReply(finalResult, job.processing_id, job.caption_email || null),
+            }, { quoted: message });
+          } catch (notificationError) {
+            // Verification is already complete. A WhatsApp delivery failure
+            // must not turn a valid payment into a dead-lettered result.
+            logger.error({ processingId: job.processing_id, err: notificationError }, 'Unable to send valid payment message');
+          }
         }
-        await sendReaction(groupId, message, '✅');
+        try {
+          await sendReaction(groupId, message, '✅');
+        } catch (notificationError) {
+          // Keep the financial verdict VALID even when reaction delivery is
+          // unavailable; do not re-enter the processing failure path.
+          logger.warn({ processingId: job.processing_id, err: notificationError }, 'Unable to send valid payment reaction');
+        }
       } else {
         const verdict = finalResult?.verification?.verdict;
         await notifyPrivateStripeReview(finalResult, job.processing_id);
         if (config.BOT_REPLY_ENABLED && verdict !== 'VALID') {
-          await currentSock.sendMessage(groupId, {
-            text: formatVerificationFailureReply(finalResult, job.processing_id),
-          }, { quoted: message });
+          try {
+            await currentSock.sendMessage(groupId, {
+              text: formatVerificationFailureReply(finalResult, job.processing_id),
+            }, { quoted: message });
+          } catch (notificationError) {
+            logger.error({ processingId: job.processing_id, err: notificationError }, 'Unable to send payment verification message');
+          }
         }
         // An ambiguous or operationally incomplete Stripe result is not proof
         // of fraud. Keep the client-requested cross for a confirmed
         // non-match/error, but use a review warning for UNCLEAR so a valid
         // payment is not visually labeled as fake while it needs review.
         const reaction = verdict === 'VALID' ? '✅' : verdict === 'UNCLEAR' ? '⚠️' : '❌';
-        await sendReaction(groupId, message, reaction);
+        try {
+          await sendReaction(groupId, message, reaction);
+        } catch (notificationError) {
+          logger.warn({ processingId: job.processing_id, verdict: verdict || 'UNVERIFIED', err: notificationError }, 'Unable to send payment verification reaction');
+        }
       }
 
       const verification = finalResult?.verification || {};
