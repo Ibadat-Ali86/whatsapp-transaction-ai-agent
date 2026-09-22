@@ -29,12 +29,12 @@ test('sends an authenticated event without logging or changing the payload', asy
     httpClient: {
       post: async (url, body, options) => {
         request = { url, body, options };
-        return { data: { provider: 'tesseract', confidence: 1 } };
+        return { data: { provider: 'tesseract', confidence: 1, fields: { amount_cents: 1000 } } };
       },
     },
   });
 
-  assert.deepEqual(result, { provider: 'tesseract', confidence: 1 });
+  assert.deepEqual(result, { provider: 'tesseract', confidence: 1, fields: { amount_cents: 1000 } });
   assert.equal(request.url, 'http://localhost:5678/webhook/test');
   assert.equal(request.body, payload);
   assert.equal(request.options.headers['x-webhook-token'], 'test-token');
@@ -42,10 +42,15 @@ test('sends an authenticated event without logging or changing the payload', asy
 
 test('normalizes supported n8n webhook response envelopes', () => {
   const result = { provider: 'tesseract', fields: { amount_cents: 1000 } };
+  const verification = { status: 'CONFIRMED', verdict: 'VALID', stripe_charge_id: 'ch-valid' };
   assert.deepEqual(normalizeN8nResponse(result), result);
   assert.deepEqual(normalizeN8nResponse([result]), result);
   assert.deepEqual(normalizeN8nResponse([{ json: result }]), result);
   assert.deepEqual(normalizeN8nResponse({ body: { data: JSON.stringify(result) } }), result);
+  assert.deepEqual(
+    normalizeN8nResponse({ provider: 'tesseract', fields: null, verification: { body: verification } }),
+    { provider: 'tesseract', fields: null, verification },
+  );
   assert.equal(normalizeN8nResponse([{ json: { unrelated: true } }]), null);
   assert.equal(normalizeN8nResponse([result, result]), null);
 });

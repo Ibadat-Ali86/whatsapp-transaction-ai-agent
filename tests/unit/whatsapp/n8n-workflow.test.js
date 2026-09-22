@@ -150,6 +150,25 @@ test('n8n v2 code nodes validate optional captions and prepare recoverable Strip
   assert.equal(ocrEmailDiffers.stripe_request.transaction_id, 'FQ2JKTVZ0');
   assert.equal(ocrEmailDiffers.stripe_request.description, 'Order 002');
 
+  const wrappedOcr = executeCodeNode(prepare, {
+    body: {
+      provider: 'tesseract',
+      raw_text: 'AQ Digital LLC $10.00 Completed',
+      fields: { amount_cents: 1000, minutes: '53', payment_month: 9, payment_day: 21 },
+      confidence: 1,
+    },
+  }, { references: { 'Validate Event': validated } })[0].json;
+  assert.equal(wrappedOcr.ocr_result.fields.amount_cents, 1000);
+  assert.equal(wrappedOcr.stripe_request.amount_cents, 1000);
+  assert.equal(wrappedOcr.stripe_request.minutes, 53);
+
+  const formatVerified = nodeByName(workflow, 'Format Verified Result');
+  const verified = executeCodeNode(formatVerified, {
+    body: { status: 'CONFIRMED', verdict: 'VALID', stripe_charge_id: 'ch-wrapped-valid' },
+  }, { references: { 'Prepare Stripe Evidence': wrappedOcr } })[0].json;
+  assert.equal(verified.verification.verdict, 'VALID');
+  assert.equal(verified.verification.stripe_charge_id, 'ch-wrapped-valid');
+
   const ready = executeCodeNode(prepare, {
     confidence: 1,
     fields: {

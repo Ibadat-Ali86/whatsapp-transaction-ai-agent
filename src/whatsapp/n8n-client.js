@@ -23,11 +23,21 @@ function responseKeys(value) {
     : [];
 }
 
-function isVerificationResult(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  if (value.fields || value.verification || value.provider) return true;
-  return typeof value.status === 'string'
+function hasVerificationDecision(value) {
+  return Boolean(value)
+    && typeof value === 'object'
+    && !Array.isArray(value)
+    && typeof value.status === 'string'
     && (typeof value.verdict === 'string' || typeof value.reason_code === 'string');
+}
+
+function isOcrResult(value) {
+  return Boolean(value)
+    && typeof value === 'object'
+    && !Array.isArray(value)
+    && value.fields
+    && typeof value.fields === 'object'
+    && (typeof value.provider === 'string' || typeof value.raw_text === 'string' || typeof value.confidence === 'number');
 }
 
 /**
@@ -54,9 +64,14 @@ function normalizeN8nResponse(value, depth = 0) {
   }
 
   if (typeof value !== 'object') return null;
-  if (isVerificationResult(value)) return value;
+  if (hasVerificationDecision(value) || isOcrResult(value)) return value;
 
-  for (const key of ['json', 'body', 'data']) {
+  if (Object.prototype.hasOwnProperty.call(value, 'verification')) {
+    const verification = normalizeN8nResponse(value.verification, depth + 1);
+    if (hasVerificationDecision(verification)) return { ...value, verification };
+  }
+
+  for (const key of ['json', 'body', 'data', 'ocr_result', 'verification_result']) {
     if (Object.prototype.hasOwnProperty.call(value, key)) {
       const normalized = normalizeN8nResponse(value[key], depth + 1);
       if (normalized) return normalized;
