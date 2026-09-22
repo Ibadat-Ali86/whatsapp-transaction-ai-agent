@@ -282,7 +282,12 @@ function formatPrivateStripeCandidateReview(ocrResult, processingId) {
 function formatVerificationFailureReply(ocrResult, processingId) {
   const verification = ocrResult?.verification || {};
   const reason = verification.reason_code || 'VERIFICATION_NOT_CONFIRMED';
-  const isUnclear = verification.verdict === 'UNCLEAR';
+  const isOperationalError = verification.verdict === 'ERROR'
+    || reason.startsWith('N8N_')
+    || reason.startsWith('PROCESSING_')
+    || reason === 'STRIPE_NETWORK_ERROR'
+    || reason === 'STRIPE_API_ERROR';
+  const isUnclear = verification.verdict === 'UNCLEAR' || isOperationalError;
   const candidateCount = Number.isInteger(verification.candidate_count)
     ? verification.candidate_count
     : null;
@@ -305,8 +310,10 @@ function formatVerificationFailureReply(ocrResult, processingId) {
   }[reason] || 'Stripe did not return one unique eligible succeeded payment for the submitted evidence.';
 
   const heading = isUnclear ? '⚠️ *Payment Requires Review*' : '❌ *Payment Not Confirmed*';
-  const conclusion = isUnclear
-    ? 'This is not a fraud determination. No payment was approved because the available evidence did not identify exactly one Stripe record.'
+  const conclusion = isOperationalError
+    ? 'This is not a fraud determination. Verification did not complete, so no payment decision was made. Please retry or review the Stripe record.'
+    : isUnclear
+      ? 'This is not a fraud determination. No payment was approved because the available evidence did not identify exactly one Stripe record.'
     : 'No payment was approved. Please review the screenshot details and Stripe record.';
   const sameImageNote = verification.same_image_candidate
     ? `\n🖼️ Same image candidate only: ${verification.same_image_original_processing_id || 'previous processing'}${verification.same_image_original_group_name ? ` in ${verification.same_image_original_group_name}` : ''}. Stripe did not prove the same payment, so this was not labelled duplicate.`

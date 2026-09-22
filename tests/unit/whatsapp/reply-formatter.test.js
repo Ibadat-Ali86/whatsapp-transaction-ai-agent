@@ -191,6 +191,19 @@ test('formats an ambiguous payment as review-required rather than fake', () => {
   assert.match(reply, /not a fraud determination/);
 });
 
+test('formats operational verification failures as review rather than invalid', () => {
+  const reply = formatVerificationFailureReply({
+    verification: {
+      verdict: 'ERROR',
+      reason_code: 'N8N_INVALID_RESPONSE',
+    },
+  }, 'wa-operational-error');
+
+  assert.match(reply, /⚠️ \*Payment Requires Review\*/);
+  assert.doesNotMatch(reply, /❌ \*Payment Not Confirmed\*/);
+  assert.match(reply, /Verification did not complete/);
+});
+
 test('explains missing unique proof when a receipt identifier was visible', () => {
   const reply = formatVerificationFailureReply({
     fields: {

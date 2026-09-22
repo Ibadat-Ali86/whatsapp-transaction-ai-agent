@@ -466,7 +466,7 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
         // of fraud. Keep the client-requested cross for a confirmed
         // non-match/error, but use a review warning for UNCLEAR so a valid
         // payment is not visually labeled as fake while it needs review.
-        const reaction = verdict === 'VALID' ? '✅' : verdict === 'UNCLEAR' ? '⚠️' : '❌';
+        const reaction = verdict === 'VALID' ? '✅' : verdict === 'INVALID' ? '❌' : '⚠️';
         try {
           await sendReaction(groupId, message, reaction);
         } catch (notificationError) {
@@ -519,7 +519,7 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
       }
     }
     try {
-      await sendReaction(job.group_id, { key: job.message_key }, '❌');
+      await sendReaction(job.group_id, { key: job.message_key }, '⚠️');
     } catch (notificationError) {
       logger.error({ processingId: job.processing_id, err: notificationError }, 'Unable to send dead-letter reaction');
     }
@@ -635,7 +635,7 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
                   }, processingId),
                 }, { quoted: msg });
               }
-              await sendReaction(groupId, msg, '❌');
+              await sendReaction(groupId, msg, '⚠️');
             } catch (notificationError) {
               logger.error({ processingId, err: notificationError }, 'Unable to send queue-full reaction');
             }
