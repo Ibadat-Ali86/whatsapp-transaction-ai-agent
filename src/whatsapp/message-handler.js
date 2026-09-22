@@ -289,7 +289,7 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
       };
 
       const ocrResult = config.N8N_ENABLED
-        ? await processImageViaN8nFn(eventPayload)
+        ? await processImageViaN8nFn(eventPayload, { config, logger })
         : await processImageOCRFn({
           imageBase64,
           mimeType: downloadedMime,
@@ -480,8 +480,8 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
   const onDeadLetter = async (job, error) => {
     logger.error({ processingId: job.processing_id, attempts: job.attempts, errorType: error?.name || 'Error', errorCode: error?.code || null }, 'Screenshot moved to dead-letter review');
     if (error?.imageHash) duplicateStore.releaseImage(error.imageHash);
-    try {
-      if (config.BOT_REPLY_ENABLED) {
+    if (config.BOT_REPLY_ENABLED) {
+      try {
         await getSock().sendMessage(job.group_id, {
           text: formatVerificationFailureReply({
             verification: {
@@ -490,7 +490,11 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
             },
           }, job.processing_id),
         }, { quoted: { key: job.message_key } });
+      } catch (notificationError) {
+        logger.error({ processingId: job.processing_id, err: notificationError }, 'Unable to send dead-letter review message');
       }
+    }
+    try {
       await sendReaction(job.group_id, { key: job.message_key }, '❌');
     } catch (notificationError) {
       logger.error({ processingId: job.processing_id, err: notificationError }, 'Unable to send dead-letter reaction');

@@ -298,6 +298,8 @@ function formatVerificationFailureReply(ocrResult, processingId) {
     IMAGE_MATCH_DIFFERENT_STRIPE_CHARGE: 'A previously approved receipt image matched this submission, but Stripe returned a different charge. Automatic approval was blocked because the image evidence conflicts with the new payment record.',
     STRIPE_NETWORK_ERROR: 'Stripe could not be reached; the payment was not approved.',
     STRIPE_API_ERROR: 'Stripe returned an API error; the payment was not approved.',
+    N8N_EMPTY_RESPONSE: 'The OCR verification workflow returned no response; the payment was not approved.',
+    N8N_INVALID_RESPONSE: 'The OCR verification workflow returned an unsupported response; the payment was not approved.',
     PROCESSING_FAILED: 'The payment pipeline failed before verification completed; the payment was not approved.',
     PROCESSING_QUEUE_FULL: 'The payment could not be queued because the processing queue was full; the payment was not approved.',
   }[reason] || 'Stripe did not return one unique eligible succeeded payment for the submitted evidence.';
