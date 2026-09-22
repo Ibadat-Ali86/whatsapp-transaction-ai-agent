@@ -75,8 +75,8 @@ async def test_matches_one_exact_cash_app_charge():
             return httpx.Response(200, json={"data": [{"id": "cus_customer", "email": "customer@example.com"}]})
         assert request.url.path == "/v1/charges"
         assert request.url.params["customer"] == "cus_customer"
-        assert "created[gte]" not in request.url.params
-        assert "created[lte]" not in request.url.params
+        assert "created[gte]" in request.url.params
+        assert "created[lte]" in request.url.params
         return httpx.Response(200, json={"data": [charge()], "has_more": False})
 
     result, requests = await verify_with_responses(responses)
@@ -295,6 +295,8 @@ async def test_relative_today_uses_receive_window_after_customer_pagination():
         if request.url.path == "/v1/customers":
             return httpx.Response(200, json={"data": [{"id": "cus_customer", "email": "customer@example.com"}]})
         if request.url.path == "/v1/charges" and request.url.params.get("customer") == "cus_customer":
+            assert "created[gte]" in request.url.params
+            assert "created[lte]" in request.url.params
             return httpx.Response(200, json={"data": [charge("ch_recent_page")], "has_more": True})
         assert request.url.path == "/v1/charges/search"
         assert "created>" in request.url.params["query"]

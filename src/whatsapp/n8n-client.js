@@ -8,6 +8,8 @@ class N8nServiceError extends Error {
     this.retryable = retryable;
     this.status = details.status ?? null;
     this.code = details.code ?? null;
+    this.causeCode = details.causeCode ?? null;
+    this.timeoutMs = details.timeoutMs ?? null;
   }
 }
 
@@ -181,14 +183,26 @@ async function processImageViaN8n(payload, options = {}) {
       if (!retryable || attempt === retryAttempts) {
         if (error instanceof N8nServiceError) throw error;
         const status = error?.response?.status || 'network';
+        const code = error?.code || error?.cause?.code || null;
         throw new N8nServiceError(
           `n8n webhook request failed (${status})`,
           retryable,
-          { status: error?.response?.status ?? null, code: error?.code ?? null },
+          {
+            status: error?.response?.status ?? null,
+            code,
+            causeCode: error?.cause?.code ?? null,
+            timeoutMs: clientConfig.N8N_TIMEOUT_MS ?? null,
+          },
         );
       }
 
-      logger.warn({ attempt, retry_in_ms: 1000 }, 'n8n webhook request failed; retrying');
+      logger.warn({
+        attempt,
+        retry_in_ms: 1000,
+        status: error?.response?.status ?? null,
+        error_code: error?.code || error?.cause?.code || null,
+        timeout_ms: clientConfig.N8N_TIMEOUT_MS ?? null,
+      }, 'n8n webhook request failed; retrying');
       await wait(1000);
     }
   }

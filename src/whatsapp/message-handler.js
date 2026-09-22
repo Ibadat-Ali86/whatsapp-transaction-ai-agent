@@ -774,10 +774,23 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
   };
 
   const onDeadLetter = async (job, error) => {
-    logger.error({ processingId: job.processing_id, attempts: job.attempts, errorType: error?.name || 'Error', errorCode: error?.code || null }, 'Screenshot moved to dead-letter review');
+    logger.error({
+      processingId: job.processing_id,
+      attempts: job.attempts,
+      errorType: error?.name || 'Error',
+      errorCode: error?.code || null,
+      errorStatus: error?.status || null,
+    }, 'Screenshot moved to dead-letter review');
     if (error?.imageHash) duplicateStore.releaseImage(error.imageHash);
     if (config.BOT_REPLY_ENABLED) {
       try {
+        // Baileys requires the complete WAMessage for `quoted`. A partial key
+        // object can crash its message-indexing code with undefined content.
+        // Older persisted jobs may not have the full message, so fall back to
+        // an unquoted notification for those records.
+        const sendOptions = job.message && typeof job.message === 'object'
+          ? { quoted: job.message }
+          : undefined;
         await getSock().sendMessage(job.group_id, {
           text: formatVerificationFailureReply({
             caption_email: job.caption_email || null,
@@ -786,7 +799,7 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
               reason_code: error?.code || 'PROCESSING_FAILED',
             },
           }, job.processing_id),
-        }, { quoted: { key: job.message_key } });
+        }, sendOptions);
       } catch (notificationError) {
         logger.error({ processingId: job.processing_id, err: notificationError }, 'Unable to send dead-letter review message');
       }

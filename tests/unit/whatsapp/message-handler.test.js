@@ -586,6 +586,35 @@ test('routes a captioned image through n8n when enabled', async () => {
   assert.equal(workflowPayload.image.mime_type, 'image/png');
 });
 
+test('sends a dead-letter notification with a complete quoted message', async () => {
+  const sent = [];
+  const sock = {
+    sendMessage: async (jid, content, options) => sent.push({ jid, content, options }),
+  };
+  const handler = createMessageHandler(sock, {
+    ALLOWED_GROUP_JIDS: ['1234567890-1234567890@g.us'],
+    BOT_REPLY_ENABLED: true,
+    BOT_REACTIONS_ENABLED: false,
+    N8N_ENABLED: true,
+    PROCESSING_QUEUE_MAX_ATTEMPTS: 1,
+  }, logger, {
+    duplicateStore: duplicateStore(),
+    downloadImage: async () => ({ imageBytes: Buffer.from('dead-letter-image'), mimeType: 'image/png', tempPath: null }),
+    processImageViaN8n: async () => {
+      const error = new Error('n8n unavailable');
+      error.retryable = false;
+      throw error;
+    },
+  });
+
+  const message = captionedImageMessage('1234567890-1234567890@g.us', 'dead-letter-message');
+  await handler({ messages: [message] });
+
+  const notification = sent.find(entry => /Payment Not Confirmed|Payment Requires Review/.test(entry.content?.text || ''));
+  assert.ok(notification);
+  assert.deepEqual(notification.options?.quoted, message);
+});
+
 test('does not turn a valid payment into a failure when WhatsApp notification delivery fails', async () => {
   const sent = [];
   const attemptedReactions = [];

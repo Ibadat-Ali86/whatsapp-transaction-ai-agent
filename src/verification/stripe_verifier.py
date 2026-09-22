@@ -603,6 +603,9 @@ class StripeVerifier:
         self,
         client: httpx.AsyncClient,
         customer_ids: set[str],
+        *,
+        lower_timestamp: Optional[int] = None,
+        upper_timestamp: Optional[int] = None,
     ) -> list[dict[str, Any]]:
         charges: list[dict[str, Any]] = []
         seen_charge_ids: set[str] = set()
@@ -611,6 +614,11 @@ class StripeVerifier:
             starting_after: Optional[str] = None
             for _ in range(self.max_pages):
                 params: dict[str, Any] = {"customer": customer_id, "limit": 100}
+                # Keep customer-scoped recovery bounded to the receipt window
+                # when one is available. Local matching remains authoritative.
+                if lower_timestamp is not None and upper_timestamp is not None:
+                    params["created[gte]"] = lower_timestamp
+                    params["created[lte]"] = upper_timestamp
                 if starting_after:
                     params["starting_after"] = starting_after
 
@@ -1030,6 +1038,9 @@ class StripeVerifier:
             customer_ids: set[str] = set()
             charges: list[dict[str, Any]] = []
             identifier_scan_hit = False
+            has_bounded_receipt_window = evidence.payment_date is not None or (
+                evidence.relative_today and evidence.received_at is not None
+            )
 
             # Cash App's provider transaction identifier is stronger than a
             # caption email or a popular amount. Search it first through the
@@ -1046,7 +1057,7 @@ class StripeVerifier:
                         max_pages=self.recovery_max_pages,
                         target_transaction_id=evidence.transaction_id,
                     )
-                    if evidence.payment_date is not None
+                    if has_bounded_receipt_window
                     else await self._charges_for_lookback(
                         client,
                         max_pages=self.recovery_max_pages,
@@ -1060,13 +1071,18 @@ class StripeVerifier:
             # remain bounded and still require one eligible charge.
             if not charges:
                 customer_ids = await self._customer_ids_for_emails(client, identity_emails) if identity_emails else set()
-                # Prefer the strongest available Stripe-side identity
-                # constraint. Do not apply the OCR date to this first
-                # customer-scoped query: receipt dates can cross the
-                # Stripe-account timezone boundary.
+                # Prefer the strongest available Stripe-side identity. When
+                # a receipt window exists, it is used only to reduce the
+                # customer charge scan; local matching still handles the
+                # account/screenshot timezone boundary exactly.
             if customer_ids:
                 try:
-                    charges = await self._charges_for_customers(client, customer_ids)
+                    charges = await self._charges_for_customers(
+                        client,
+                        customer_ids,
+                        lower_timestamp=(bounded_day_lower_timestamp if has_bounded_receipt_window else None),
+                        upper_timestamp=(bounded_day_upper_timestamp if has_bounded_receipt_window else None),
+                    )
                 except StripeVerificationError as exc:
                     if exc.reason_code != "STRIPE_PAGINATION_LIMIT":
                         raise
@@ -1083,7 +1099,7 @@ class StripeVerifier:
                                 bounded_day_upper_timestamp,
                                 max_pages=self.recovery_max_pages,
                             )
-                            if evidence.payment_date is not None
+                            if has_bounded_receipt_window
                             else await self._charges_for_lookback(
                                 client,
                                 max_pages=self.recovery_max_pages,
@@ -1105,7 +1121,7 @@ class StripeVerifier:
                                     bounded_day_upper_timestamp,
                                     max_pages=self.recovery_max_pages,
                                 )
-                                if evidence.payment_date is not None
+                                if has_bounded_receipt_window
                                 else await self._charges_for_lookback(
                                     client,
                                     max_pages=self.recovery_max_pages,
@@ -1138,7 +1154,7 @@ class StripeVerifier:
                             bounded_day_upper_timestamp,
                             max_pages=self.recovery_max_pages,
                         )
-                        if evidence.payment_date is not None
+                        if has_bounded_receipt_window
                         else await self._charges_for_lookback(
                             client,
                             max_pages=self.recovery_max_pages,
@@ -1158,14 +1174,23 @@ class StripeVerifier:
                             bounded_day_upper_timestamp,
                             max_pages=self.recovery_max_pages,
                         )
-                        if evidence.payment_date is not None
+                        if has_bounded_receipt_window
                         else await self._charges_for_lookback(
                             client,
                             max_pages=self.recovery_max_pages,
                         )
                     )
             elif not charges and identity_emails:
-                charges = await self._charges_for_lookback(client, max_pages=self.recovery_max_pages)
+                charges = (
+                    await self._charges_for_day(
+                        client,
+                        bounded_day_lower_timestamp,
+                        bounded_day_upper_timestamp,
+                        max_pages=self.recovery_max_pages,
+                    )
+                    if has_bounded_receipt_window
+                    else await self._charges_for_lookback(client, max_pages=self.recovery_max_pages)
+                )
             elif not charges and evidence.payment_date is not None:
                 charges = await self._charges_for_day(
                     client,
