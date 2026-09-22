@@ -310,6 +310,116 @@ test('uses customer, amount, date, and time plus pHash when the identifier is no
   assert.equal(result.matchType, 'PHASH_RECEIPT_EVIDENCE');
 });
 
+test('detects a same-group recompressed repeat from a previously valid canonical Stripe receipt', () => {
+  const store = createDuplicateStore({ filePath: temporaryPath(), phashMaxDistance: 6 });
+  const firstSha = '1'.repeat(64);
+  const secondSha = '2'.repeat(64);
+  const sharedReceipt = {
+    captionEmail: 'temp2022tj@gmail.com',
+    amountCents: 100,
+    paymentDate: '2026-09-22',
+    paymentHour: 10,
+    minutes: 59,
+  };
+
+  store.claimImage({ sha256: firstSha, processingId: 'wa-first', groupIdHash: 'group-a' });
+  store.registerImageEvidence({
+    sha256: firstSha,
+    phash: '0000000000000000',
+    stripeChargeId: 'ch_valid_temp_payment',
+    verificationVerdict: 'VALID',
+    groupIdHash: 'group-a',
+    ...sharedReceipt,
+    processingId: 'wa-first',
+  });
+
+  store.claimImage({ sha256: secondSha, processingId: 'wa-second', groupIdHash: 'group-a' });
+  const result = store.registerImageEvidence({
+    sha256: secondSha,
+    phash: '0000000000000001',
+    verificationVerdict: 'UNCLEAR',
+    groupIdHash: 'group-a',
+    ...sharedReceipt,
+    processingId: 'wa-second',
+  });
+
+  assert.equal(result.duplicate, true);
+  assert.equal(result.matchType, 'PHASH_VALIDATED_GROUP_RECEIPT');
+  assert.equal(result.record.processing_id, 'wa-first');
+});
+
+test('recovers a same-group duplicate from a legacy valid record without canonical date/time', () => {
+  const store = createDuplicateStore({ filePath: temporaryPath(), phashMaxDistance: 6 });
+  const firstSha = '3'.repeat(64);
+  const secondSha = '4'.repeat(64);
+
+  store.claimImage({ sha256: firstSha, processingId: 'wa-legacy-first', groupIdHash: 'group-a' });
+  store.registerImageEvidence({
+    sha256: firstSha,
+    phash: '0000000000000000',
+    captionEmail: 'temp2022tj@gmail.com',
+    amountCents: 100,
+    stripeChargeId: 'ch_legacy_valid_payment',
+    verificationVerdict: 'VALID',
+    groupIdHash: 'group-a',
+    processingId: 'wa-legacy-first',
+  });
+
+  store.claimImage({ sha256: secondSha, processingId: 'wa-legacy-second', groupIdHash: 'group-a' });
+  const result = store.registerImageEvidence({
+    sha256: secondSha,
+    phash: '0000000000000001',
+    captionEmail: 'temp2022tj@gmail.com',
+    amountCents: 100,
+    paymentDate: '2026-09-22',
+    paymentHour: 10,
+    minutes: 59,
+    verificationVerdict: 'UNCLEAR',
+    groupIdHash: 'group-a',
+    processingId: 'wa-legacy-second',
+  });
+
+  assert.equal(result.duplicate, true);
+  assert.equal(result.matchType, 'PHASH_VALIDATED_GROUP_LEGACY_RECEIPT');
+  assert.equal(result.record.processing_id, 'wa-legacy-first');
+});
+
+test('does not use the legacy valid-record fallback across groups', () => {
+  const store = createDuplicateStore({ filePath: temporaryPath(), phashMaxDistance: 6 });
+  const firstSha = '5'.repeat(64);
+  const secondSha = '6'.repeat(64);
+  const evidence = {
+    captionEmail: 'temp2022tj@gmail.com',
+    amountCents: 100,
+    paymentDate: '2026-09-22',
+    paymentHour: 10,
+    minutes: 59,
+  };
+
+  store.claimImage({ sha256: firstSha, processingId: 'wa-cross-first', groupIdHash: 'group-a' });
+  store.registerImageEvidence({
+    sha256: firstSha,
+    phash: '0000000000000000',
+    stripeChargeId: 'ch_cross_group_valid_payment',
+    verificationVerdict: 'VALID',
+    groupIdHash: 'group-a',
+    processingId: 'wa-cross-first',
+    captionEmail: evidence.captionEmail,
+    amountCents: evidence.amountCents,
+  });
+  store.claimImage({ sha256: secondSha, processingId: 'wa-cross-second', groupIdHash: 'group-b' });
+  const result = store.registerImageEvidence({
+    sha256: secondSha,
+    phash: '0000000000000001',
+    verificationVerdict: 'UNCLEAR',
+    groupIdHash: 'group-b',
+    processingId: 'wa-cross-second',
+    ...evidence,
+  });
+
+  assert.equal(result.duplicate, false);
+});
+
 test('detects a re-encoded repeat when OCR misreads the identifier and misses the customer', () => {
   const store = createDuplicateStore({ filePath: temporaryPath(), phashMaxDistance: 6 });
   const firstSha = 'd'.repeat(64);

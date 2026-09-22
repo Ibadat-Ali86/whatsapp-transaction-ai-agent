@@ -408,7 +408,32 @@ function createDuplicateStore({
             ].includes(occurrence.evidence_fingerprint);
             const sameVisualFingerprint = currentVisualFingerprint
               && occurrenceVisualReceiptFingerprint(occurrence) === currentVisualFingerprint;
-            if (!sameEvidenceFingerprint && !sameVisualFingerprint) continue;
+            // Older valid records may predate canonical Stripe date/time
+            // persistence and therefore have no receipt fingerprint. Keep
+            // those records useful after a deployment, but require the
+            // strongest remaining same-group evidence: a previously VALID
+            // Stripe charge, same amount and identity, and an exact/near
+            // identical visual hash. This is intentionally narrower than
+            // the normal visual fallback and never bypasses a different
+            // current Stripe charge (handled below as a conflict).
+            const sameLegacyValidatedGroupReceipt = occurrence.verification_verdict === 'VALID'
+              && Boolean(occurrence.stripe_charge_id)
+              && occurrence.group_id_hash
+              && currentEvidence.group_id_hash
+              && occurrence.group_id_hash === currentEvidence.group_id_hash
+              && !occurrence.evidence_fingerprint
+              && Boolean(currentFingerprint)
+              && Number.isInteger(occurrence.amount_cents)
+              && occurrence.amount_cents === currentEvidence.amount_cents
+              && (
+                occurrence.email_hash
+                && currentEvidence.email_hash
+                && occurrence.email_hash === currentEvidence.email_hash
+                || storedCustomerName(occurrence.customer_name)
+                && currentCustomerName
+                && storedCustomerName(occurrence.customer_name) === currentCustomerName
+              );
+            if (!sameEvidenceFingerprint && !sameVisualFingerprint && !sameLegacyValidatedGroupReceipt) continue;
             const distance = hammingDistance(phash, occurrence.phash);
             if (distance !== null && distance <= phashMaxDistance) {
               // Visual similarity is duplicate proof only when both images
@@ -417,7 +442,10 @@ function createDuplicateStore({
                 persist();
                 return { duplicate: true, matchType: 'PHASH', record: occurrence, distance };
               }
-              if (occurrence.stripe_charge_id && occurrence.stripe_charge_id !== stripeChargeId) {
+              if (occurrence.stripe_charge_id
+                && typeof stripeChargeId === 'string'
+                && stripeChargeId
+                && occurrence.stripe_charge_id !== stripeChargeId) {
                 // A visually equivalent receipt with a different Stripe
                 // charge is not proof of a new payment. Preserve the evidence
                 // but block automatic approval so the caller can return an
@@ -440,6 +468,13 @@ function createDuplicateStore({
                 && storedCustomerName(occurrence.customer_name)
                 && currentCustomerName
                 && storedCustomerName(occurrence.customer_name) === currentCustomerName;
+              const sameValidatedGroupFingerprint = occurrence.verification_verdict === 'VALID'
+                && Boolean(occurrence.stripe_charge_id)
+                && occurrence.group_id_hash
+                && currentEvidence.group_id_hash
+                && occurrence.group_id_hash === currentEvidence.group_id_hash
+                && Boolean(currentFingerprint)
+                && occurrence.evidence_fingerprint === currentFingerprint;
               const samePaymentEvidence = sameTransactionId || sameCustomerReceipt;
               // The visual-only fallback is deliberately stricter than the
               // normal pHash near-match path. Exact pHash equality is needed
@@ -447,7 +482,10 @@ function createDuplicateStore({
               // payments; the visual signal must represent the same receipt,
               // not merely the same Cash App layout.
               const sameVisualReceipt = Boolean(sameVisualFingerprint) && distance === 0;
-              const sameDuplicateEvidence = samePaymentEvidence || sameVisualReceipt;
+              const sameDuplicateEvidence = samePaymentEvidence
+                || sameVisualReceipt
+                || sameValidatedGroupFingerprint
+                || sameLegacyValidatedGroupReceipt && distance <= Math.min(phashMaxDistance, 1);
               if (
                 sameDuplicateEvidence
                 && (
@@ -463,6 +501,12 @@ function createDuplicateStore({
                   matchType: sameVisualReceipt
                     && !samePaymentEvidence
                     ? 'PHASH_VISUAL_RECEIPT'
+                    : sameValidatedGroupFingerprint
+                      && !samePaymentEvidence
+                      ? 'PHASH_VALIDATED_GROUP_RECEIPT'
+                    : sameLegacyValidatedGroupReceipt
+                      && !samePaymentEvidence
+                      ? 'PHASH_VALIDATED_GROUP_LEGACY_RECEIPT'
                     : sameTransactionId ? 'PHASH_TRANSACTION_ID' : 'PHASH_RECEIPT_EVIDENCE',
                   record: occurrence,
                   distance,

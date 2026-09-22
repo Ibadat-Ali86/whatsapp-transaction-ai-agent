@@ -4,7 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 process.env.WHATSAPP_ALLOWED_GROUP_JIDS ||= '1234567890-1234567890@g.us';
-const { createMessageHandler } = require('../../../src/whatsapp/message-handler');
+const { createMessageHandler, relativeTodayDate } = require('../../../src/whatsapp/message-handler');
 const { createDuplicateStore } = require('../../../src/whatsapp/duplicate-store');
 
 const logger = {
@@ -53,6 +53,14 @@ function standaloneEmailMessage(remoteJid, email, id = 'email-message-id') {
   };
 }
 
+test('derives a bounded receipt date for a Today screenshot', () => {
+  assert.equal(
+    relativeTodayDate('AQ Digital LLC Today at 10:59 AM', '2026-09-22T16:00:00.000Z', 'UTC'),
+    '2026-09-22',
+  );
+  assert.equal(relativeTodayDate('AQ Digital LLC yesterday at 10:59 AM', '2026-09-22T16:00:00.000Z', 'UTC'), null);
+});
+
 test('does not process an image from an unallowlisted group', async () => {
   let sendMessageCalled = false;
   const sock = {
@@ -87,15 +95,15 @@ test('does not process an image from a direct chat', async () => {
   assert.equal(sendMessageCalled, false);
 });
 
-test('intakes a 50-group image burst without serial association delays', async () => {
-  const groupIds = Array.from({ length: 50 }, (_, index) => `2000000000-${String(index).padStart(10, '0')}@g.us`);
+test('intakes a single-group image burst without serial association delays', async () => {
+  const groupId = '2000000000-0000000000@g.us';
   const reactions = [];
   let processed = 0;
-  const storePath = path.join(os.tmpdir(), `wa-50-group-handler-${process.pid}-${Math.random()}.json`);
+  const storePath = path.join(os.tmpdir(), `wa-single-group-handler-${process.pid}-${Math.random()}.json`);
   const handler = createMessageHandler({
     sendMessage: async (_jid, content) => reactions.push(content),
   }, {
-    ALLOWED_GROUP_JIDS: groupIds,
+    ALLOWED_GROUP_JIDS: [groupId],
     BOT_REPLY_ENABLED: false,
     BOT_REACTIONS_ENABLED: true,
     N8N_ENABLED: false,
@@ -106,7 +114,7 @@ test('intakes a 50-group image burst without serial association delays', async (
   }, logger, {
     duplicateStore: createDuplicateStore({ filePath: storePath }),
     downloadImage: async (_sock, message) => ({
-      imageBytes: Buffer.from(`unique-burst-image-${message.key.remoteJid}`),
+      imageBytes: Buffer.from(`unique-burst-image-${message.key.id}`),
       mimeType: 'image/png',
       tempPath: null,
     }),
@@ -116,7 +124,7 @@ test('intakes a 50-group image burst without serial association delays', async (
     }),
   });
 
-  const messages = groupIds.map((groupId, index) => ({
+  const messages = Array.from({ length: 50 }, (_, index) => ({
     key: {
       remoteJid: groupId,
       participant: `923000000${String(index).padStart(3, '0')}@s.whatsapp.net`,
@@ -133,7 +141,7 @@ test('intakes a 50-group image burst without serial association delays', async (
   assert.equal(processed, 50);
   assert.equal(reactions.length, 50);
   assert.equal(reactions.filter(event => event.react?.text === '✅').length, 50);
-  assert.ok(elapsedMs < 1000, `50-group intake took ${elapsedMs}ms`);
+  assert.ok(elapsedMs < 1000, `single-group burst intake took ${elapsedMs}ms`);
 });
 
 test('processes a captionless image so Stripe can recover identity from OCR evidence', async () => {
@@ -441,7 +449,7 @@ test('reconciles a same-group multi-screenshot candidate batch one-to-one', asyn
     BOT_REACTIONS_ENABLED: true,
     N8N_ENABLED: false,
     BATCH_RECONCILIATION_ENABLED: true,
-    BATCH_RECONCILIATION_WINDOW_MS: 50,
+    BATCH_RECONCILIATION_WINDOW_MS: 10,
     BATCH_RECONCILIATION_MAX_ITEMS: 8,
     PROCESSING_QUEUE_COOLDOWN_MS: 0,
   }, logger, {
@@ -452,6 +460,9 @@ test('reconciles a same-group multi-screenshot candidate batch one-to-one', asyn
       tempPath: null,
     }),
     processImageOCR: async (_params) => {
+      // Reproduce the production shape: a slow first Stripe/OCR lookup while
+      // the next same-group screenshot is already waiting in the queue.
+      await new Promise(resolve => setTimeout(resolve, 30));
       // The queue preserves message order; use the image bytes supplied by the
       // downloader through the deterministic message id for the test shape.
       const selectedTime = _params.messageId === 'batch-one' ? [10, 5] : [10, 30];
@@ -474,6 +485,7 @@ test('reconciles a same-group multi-screenshot candidate batch one-to-one', asyn
   });
 
   await handler({ messages: [first, second] });
+  assert.equal(reactions.filter(event => event.react?.text === '⚠️').length, 0);
   await handler.flushPendingReconciliations();
 
   assert.equal(reactions.filter(event => event.react?.text === '✅').length, 2);

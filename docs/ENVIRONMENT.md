@@ -69,12 +69,13 @@ the matching Stripe charge when it agrees with the eligible payment data.
 
 ## WhatsApp group access
 
-WHATSAPP_ALLOWED_GROUP_JIDS=1234567890-1234567890@g.us,1234567890-9876543210@g.us
+WHATSAPP_ALLOWED_GROUP_JIDS=1234567890-1234567890@g.us
 
-- This is an exact, comma-separated allowlist of group JIDs.
+- This is the exact JID of the single payment-verification group.
+- Multiple group JIDs are rejected at startup; the bot is intentionally scoped to one group.
 - Direct chats and all other groups are ignored before application processing.
 - An empty allowlist is fail-closed: the bot can authenticate, but it will not process or reply to messages.
-- `WHATSAPP_TEST_GROUP_JID` remains supported as a legacy single-group setting.
+- `WHATSAPP_TEST_GROUP_JID` remains supported as a legacy alias for the same group.
 - The project is pinned to Baileys `7.0.0-rc14`; stop any old bot process before restarting after dependency changes.
 - `BOT_LOCK_PATH` is a local PID marker that prevents two bot processes from
   sharing the same Baileys auth state and processing queue. Keep one bot

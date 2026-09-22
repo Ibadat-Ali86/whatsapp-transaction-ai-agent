@@ -74,7 +74,11 @@ Back it up only through an approved secure mechanism.
 
 ## WhatsApp group authorization
 
-Baileys links the WhatsApp account as a device; WhatsApp does not provide a QR-time prompt for selecting groups. The application therefore enforces least privilege with the exact `WHATSAPP_ALLOWED_GROUP_JIDS` allowlist.
+Baileys links the WhatsApp account as a device; WhatsApp does not provide a QR-time prompt for selecting groups. The application therefore enforces least privilege with the exact single-group `WHATSAPP_ALLOWED_GROUP_JIDS` setting.
+
+The bot is intentionally scoped to one payment-verification group. Multiple
+configured group JIDs are rejected at startup, and the handler still repeats
+the exact group check as defense in depth.
 
 This is application-level processing isolation, not account-level WhatsApp visibility. For true account-level isolation, use a dedicated WhatsApp number that is added only to the approved groups.
 

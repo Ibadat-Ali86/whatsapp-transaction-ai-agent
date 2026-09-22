@@ -23,6 +23,12 @@ function parseAllowedGroupJids(...values) {
     );
   }
 
+  if (uniqueGroupJids.length > 1) {
+    throw new Error(
+      'Exactly one WhatsApp group JID may be configured. Set only the payment-verification group in WHATSAPP_ALLOWED_GROUP_JIDS (and WHATSAPP_TEST_GROUP_JID if used).'
+    );
+  }
+
   return uniqueGroupJids;
 }
 

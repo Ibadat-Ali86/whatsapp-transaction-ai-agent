@@ -117,7 +117,7 @@ n8n containers must never receive `STRIPE_SECRET_KEY`.
 
 Edit only the environment files on the Droplet:
 
-- `bot.env`: exact comma-separated `WHATSAPP_ALLOWED_GROUP_JIDS`, n8n token,
+- `bot.env`: exact single-group `WHATSAPP_ALLOWED_GROUP_JIDS`, n8n token,
   and queue settings.
 - `ocr.env`: Stripe live mode, restricted read-only secret, Stripe service
   token, and approved AI provider settings.

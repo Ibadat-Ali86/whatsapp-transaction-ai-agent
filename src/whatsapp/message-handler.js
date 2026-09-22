@@ -18,6 +18,78 @@ const { createProcessingQueue, QueueFullError } = require('./processing-queue');
 const { getImageMessage, getImageMimeType } = require('./message-media');
 const { reconcileCandidateBatch } = require('../verification/batch-reconciler');
 
+function integerEvidence(value, minimum, maximum) {
+  if (value === null || value === undefined || value === '' || typeof value === 'boolean') return null;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= minimum && parsed <= maximum ? parsed : null;
+}
+
+function relativeTodayDate(rawText, receivedAt, timezone) {
+  if (typeof rawText !== 'string' || !/\btoday\b/i.test(rawText) || typeof receivedAt !== 'string') return null;
+  const parsed = new Date(receivedAt);
+  if (Number.isNaN(parsed.getTime())) return null;
+  try {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: typeof timezone === 'string' && timezone ? timezone : 'UTC',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(parsed);
+  } catch (_error) {
+    return null;
+  }
+}
+
+function duplicateEvidenceFromResult(result, {
+  fallbackEmail = null,
+  fallbackAmountCents = null,
+  fallbackTransactionId = null,
+  fallbackCustomerName = null,
+  fallbackPaymentDate = null,
+  fallbackPaymentHour = null,
+  fallbackMinutes = null,
+  receivedAt = null,
+  timezone = null,
+} = {}) {
+  const fields = result?.fields || {};
+  const matchedTransaction = result?.verification?.matched_transaction || {};
+  const inferredTodayDate = relativeTodayDate(result?.raw_text, receivedAt, timezone);
+  const rawPaymentDate = fields.payment_date
+    || matchedTransaction.payment_date
+    || fallbackPaymentDate
+    || inferredTodayDate;
+  const paymentDate = typeof rawPaymentDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(rawPaymentDate)
+    ? rawPaymentDate
+    : null;
+
+  const amountCents = integerEvidence(fields.amount_cents, 1, 100_000_000)
+    ?? integerEvidence(matchedTransaction.amount_cents, 1, 100_000_000)
+    ?? integerEvidence(fallbackAmountCents, 1, 100_000_000);
+  const transactionId = fields.transaction_id || matchedTransaction.payment_identifier || fallbackTransactionId || null;
+  const paymentMonth = integerEvidence(fields.payment_month, 1, 12)
+    ?? integerEvidence(matchedTransaction.payment_month, 1, 12)
+    ?? (paymentDate ? integerEvidence(paymentDate.slice(5, 7), 1, 12) : null);
+  const paymentDay = integerEvidence(fields.payment_day, 1, 31)
+    ?? integerEvidence(matchedTransaction.payment_day, 1, 31)
+    ?? (paymentDate ? integerEvidence(paymentDate.slice(8, 10), 1, 31) : null);
+
+  return {
+    captionEmail: matchedTransaction.customer_email || fields.email || fallbackEmail,
+    amountCents,
+    transactionId,
+    customerName: matchedTransaction.customer_name || fields.customer_name || fallbackCustomerName,
+    paymentDate,
+    paymentMonth,
+    paymentDay,
+    paymentHour: integerEvidence(fields.payment_hour, 0, 23)
+      ?? integerEvidence(matchedTransaction.payment_hour, 0, 23)
+      ?? integerEvidence(fallbackPaymentHour, 0, 23),
+    minutes: integerEvidence(fields.minutes, 0, 59)
+      ?? integerEvidence(matchedTransaction.minutes, 0, 59)
+      ?? integerEvidence(fallbackMinutes, 0, 59),
+  };
+}
+
 /**
  * Orchestrates WhatsApp intake and delegates expensive work to a durable,
  * single-worker queue. The queue is deliberately created outside the
@@ -333,19 +405,21 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
         };
         duplicateRecord = transactionClaim.record;
       } else {
-        const fields = entry.result?.fields || {};
+        const evidence = duplicateEvidenceFromResult(entry.result, {
+          fallbackEmail: entry.job.caption_email,
+          fallbackAmountCents: candidate.amount_cents,
+          fallbackTransactionId: candidate.payment_identifier,
+          fallbackCustomerName: candidate.customer_name,
+          fallbackPaymentDate: candidate.payment_date,
+          fallbackPaymentHour: candidate.payment_hour,
+          fallbackMinutes: candidate.minutes,
+          receivedAt: entry.job.received_at,
+          timezone: config.STRIPE_TIMEZONE,
+        });
         duplicateStore.registerImageEvidence({
           sha256: entry.imageHash,
           phash: entry.result?.image_phash,
-          captionEmail: candidate.customer_email || fields.email || entry.job.caption_email,
-          amountCents: fields.amount_cents ?? candidate.amount_cents,
-          transactionId: fields.transaction_id || candidate.payment_identifier,
-          customerName: candidate.customer_name || fields.customer_name,
-          paymentDate: fields.payment_date || candidate.payment_date,
-          paymentMonth: Number.isInteger(fields.payment_month) ? fields.payment_month : null,
-          paymentDay: Number.isInteger(fields.payment_day) ? fields.payment_day : null,
-          paymentHour: Number.isInteger(Number(fields.payment_hour)) ? Number(fields.payment_hour) : null,
-          minutes: Number.isInteger(Number(fields.minutes)) ? Number(fields.minutes) : null,
+          ...evidence,
           stripeChargeId: candidate.stripe_charge_id,
           verificationVerdict: 'VALID',
           verificationReason: 'BATCH_UNIQUE_CANDIDATE_ASSIGNMENT',
@@ -394,6 +468,24 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
     return current;
   };
 
+  const scheduleBatchFlush = groupId => {
+    if (batchFlushTimers.has(groupId)) clearTimeout(batchFlushTimers.get(groupId));
+    const windowMs = config.BATCH_RECONCILIATION_WINDOW_MS ?? 2500;
+    batchFlushTimers.set(groupId, setTimeout(() => {
+      batchFlushTimers.delete(groupId);
+      // The reconciliation timer starts after a slow Stripe lookup, while
+      // later screenshots from the same group may still be queued behind the
+      // single worker. Never finalize the batch while any same-group work is
+      // queued or processing; otherwise every screenshot in a burst becomes
+      // review-required before the batch can be assembled.
+      if (queue.pendingCountForGroup(groupId) > 0) {
+        scheduleBatchFlush(groupId);
+        return;
+      }
+      void requestBatchFlush(groupId, { force: true });
+    }, Math.max(0, windowMs)));
+  };
+
   const deferBatchReview = entry => {
     const groupId = entry.job.group_id;
     const entries = pendingBatchReconciliations.get(groupId) || [];
@@ -411,17 +503,7 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
         finalResult: item.result,
       })));
     }
-    if (batchFlushTimers.has(groupId)) clearTimeout(batchFlushTimers.get(groupId));
-    const windowMs = config.BATCH_RECONCILIATION_WINDOW_MS ?? 2500;
-    batchFlushTimers.set(groupId, setTimeout(() => {
-      batchFlushTimers.delete(groupId);
-      void requestBatchFlush(groupId, { force: true });
-    }, Math.max(0, windowMs)));
-    // Attempt reconciliation as soon as a second screenshot arrives. This is
-    // important when Stripe lookups are slow: the queue is serial, so a timer
-    // alone would finalize the first ambiguous item before the next one was
-    // available. Unresolved entries remain buffered for the next screenshot.
-    if (entries.length > 1) void requestBatchFlush(groupId);
+    scheduleBatchFlush(groupId);
   };
 
   const processJob = async job => {
@@ -530,21 +612,15 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
           excludedStripeChargeIds: claimedStripeChargeIds,
         });
 
-      const fields = ocrResult?.fields || {};
+      const evidence = duplicateEvidenceFromResult(ocrResult, {
+        fallbackEmail: job.caption_email,
+        receivedAt: job.received_at,
+        timezone: config.STRIPE_TIMEZONE,
+      });
       const imageEvidence = duplicateStore.registerImageEvidence({
         sha256: imageHash,
         phash: ocrResult?.image_phash,
-        captionEmail: ocrResult?.verification?.matched_transaction?.customer_email || fields.email || job.caption_email,
-        amountCents: fields.amount_cents,
-        transactionId: fields.transaction_id,
-        customerName: ocrResult?.verification?.matched_transaction?.customer_name || fields.customer_name,
-        paymentDate: fields.payment_date,
-        paymentMonth: fields.payment_month,
-        paymentDay: fields.payment_day,
-        paymentHour: fields.payment_hour,
-        minutes: fields.minutes != null && Number.isInteger(Number(fields.minutes))
-          ? Number(fields.minutes)
-          : null,
+        ...evidence,
         stripeChargeId: ocrResult?.verification?.stripe_charge_id,
         verificationVerdict: ocrResult?.verification?.verdict,
         verificationReason: ocrResult?.verification?.reason_code,
@@ -559,11 +635,11 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
         duplicate_evidence: {
           exact_sha_claimed: Boolean(imageClaim.duplicate),
           phash_available: typeof ocrResult?.image_phash === 'string',
-          transaction_id_available: typeof fields.transaction_id === 'string' && fields.transaction_id.length > 0,
-          customer_name_available: Boolean(ocrResult?.verification?.matched_transaction?.customer_name || fields.customer_name),
-          amount_available: Number.isInteger(fields.amount_cents),
-          receipt_date_available: Boolean(fields.payment_date || (fields.payment_month && fields.payment_day)),
-          receipt_time_available: fields.payment_hour != null && fields.minutes != null,
+          transaction_id_available: Boolean(evidence.transactionId),
+          customer_name_available: Boolean(evidence.customerName),
+          amount_available: Number.isInteger(evidence.amountCents),
+          receipt_date_available: Boolean(evidence.paymentDate || (evidence.paymentMonth && evidence.paymentDay)),
+          receipt_time_available: evidence.paymentHour != null && evidence.minutes != null,
           image_match: imageEvidence.duplicate ? imageEvidence.matchType : imageEvidence.conflict ? 'CONFLICT' : null,
         },
       }, 'Duplicate evidence evaluated');
@@ -861,4 +937,4 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
   return handler;
 }
 
-module.exports = { createMessageHandler };
+module.exports = { createMessageHandler, relativeTodayDate };

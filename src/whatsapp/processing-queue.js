@@ -121,6 +121,12 @@ function createProcessingQueue({
   const pendingCount = () => Object.values(state.jobs)
     .filter(job => job.status === 'QUEUED' || job.status === 'PROCESSING').length;
 
+  const pendingCountForGroup = groupId => Object.values(state.jobs)
+    .filter(job => (
+      (job.status === 'QUEUED' || job.status === 'PROCESSING')
+      && job.group_id === groupId
+    )).length;
+
   const waitFor = jobId => new Promise((resolve, reject) => {
     const job = state.jobs[jobId];
     if (job?.status === 'COMPLETED') {
@@ -285,6 +291,7 @@ function createProcessingQueue({
       void pump();
       return result;
     },
+    pendingCountForGroup,
     start() {
       stopped = false;
       void pump();

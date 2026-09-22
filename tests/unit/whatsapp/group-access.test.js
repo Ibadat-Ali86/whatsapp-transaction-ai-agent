@@ -7,16 +7,20 @@ const {
   shouldIgnoreJid,
 } = require('../../../src/whatsapp/group-access');
 
-test('parses, trims, and de-duplicates comma-separated group JIDs', () => {
+test('parses and trims the single configured payment group JID', () => {
   assert.deepEqual(
     parseAllowedGroupJids(
-      ' 1234567890-1234567890@g.us,1234567890-9876543210@g.us ',
+      ' 1234567890-1234567890@g.us ',
       '1234567890-1234567890@g.us'
     ),
-    [
-      '1234567890-1234567890@g.us',
-      '1234567890-9876543210@g.us',
-    ]
+    ['1234567890-1234567890@g.us']
+  );
+});
+
+test('rejects configuration for more than one payment group', () => {
+  assert.throws(
+    () => parseAllowedGroupJids('1234567890-1234567890@g.us,1234567890-9876543210@g.us'),
+    /Exactly one WhatsApp group JID may be configured/
   );
 });
 
