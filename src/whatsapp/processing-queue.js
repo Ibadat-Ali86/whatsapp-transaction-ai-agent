@@ -37,6 +37,7 @@ function createProcessingQueue({
   concurrency = 1,
   maxPending = 200,
   maxAttempts = 4,
+  deferRetryableErrors = false,
   backoffBaseMs = 5000,
   backoffMaxMs = 300000,
   cooldownMs = 250,
@@ -216,14 +217,27 @@ function createProcessingQueue({
         message: error?.message || 'Processing failed',
         at: Date.now(),
       };
-      const canRetry = error?.retryable === true && attempt < maxAttempts;
+      // A dependency outage is not a payment decision. When enabled, keep
+      // retryable jobs durably queued beyond maxAttempts instead of converting
+      // a temporary n8n/WhatsApp/OCR failure into a manual-review dead letter.
+      const deferRetryable = deferRetryableErrors && error?.retryable === true;
+      const canRetry = deferRetryable || (error?.retryable === true && attempt < maxAttempts);
       if (canRetry) {
-        const exponential = Math.min(backoffMaxMs, backoffBaseMs * (2 ** (attempt - 1)));
+        const exponential = Math.min(backoffMaxMs, backoffBaseMs * (2 ** Math.min(attempt - 1, 20)));
         const jitter = Math.floor(Math.random() * Math.max(1, Math.floor(exponential * 0.25)));
         job.status = 'QUEUED';
         job.available_at = Date.now() + exponential + jitter;
         persist();
-        logger.warn({ processingId: job.processing_id, attempt, retryAt: job.available_at }, 'Processing queue job scheduled for retry');
+        logger.warn({
+          processingId: job.processing_id,
+          attempt,
+          retryAt: job.available_at,
+          deferredUntilRecovered: deferRetryable,
+          errorType: error?.name || 'Error',
+          errorCode: error?.code || null,
+        }, deferRetryable
+          ? 'Processing queue job deferred until dependency recovers'
+          : 'Processing queue job scheduled for retry');
       } else {
         job.status = 'DEAD_LETTER';
         job.dead_lettered_at = Date.now();

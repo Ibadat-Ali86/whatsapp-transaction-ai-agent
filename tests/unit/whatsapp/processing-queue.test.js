@@ -81,6 +81,35 @@ test('retries retryable jobs with bounded attempts and persists final state', as
   fs.unlinkSync(filePath);
 });
 
+test('keeps retryable dependency failures queued beyond the normal attempt limit', async () => {
+  let attempts = 0;
+  let deadLetterCalled = false;
+  const queue = createProcessingQueue({
+    maxAttempts: 1,
+    deferRetryableErrors: true,
+    backoffBaseMs: 1,
+    backoffMaxMs: 1,
+    cooldownMs: 0,
+    worker: async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        const error = new Error('n8n timeout');
+        error.retryable = true;
+        throw error;
+      }
+      return { status: 'COMPLETED', verdict: 'VALID' };
+    },
+    onDeadLetter: async () => { deadLetterCalled = true; },
+    logger: logger(),
+  });
+
+  const result = await queue.enqueue({ processing_id: 'deferred-1', idempotency_key: 'deferred-1', group_id: 'group-a' });
+  assert.equal(result.verdict, 'VALID');
+  assert.equal(attempts, 2);
+  assert.equal(deadLetterCalled, false);
+  queue.stop();
+});
+
 test('moves permanent failures to dead letter and does not retry them', async () => {
   let attempts = 0;
   let deadLetter;

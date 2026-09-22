@@ -816,6 +816,7 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
     concurrency: config.PROCESSING_QUEUE_CONCURRENCY || 1,
     maxPending: config.PROCESSING_QUEUE_MAX_PENDING || 200,
     maxAttempts: config.PROCESSING_QUEUE_MAX_ATTEMPTS || 4,
+    deferRetryableErrors: config.PROCESSING_QUEUE_DEFER_RETRYABLE_ERRORS !== false,
     backoffBaseMs: config.PROCESSING_QUEUE_BACKOFF_BASE_MS || 5000,
     backoffMaxMs: config.PROCESSING_QUEUE_BACKOFF_MAX_MS || 300000,
     cooldownMs: config.PROCESSING_QUEUE_COOLDOWN_MS ?? 250,

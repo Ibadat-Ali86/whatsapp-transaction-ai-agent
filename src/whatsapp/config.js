@@ -50,6 +50,9 @@ const config = {
   PROCESSING_QUEUE_CONCURRENCY: parseInteger(process.env.PROCESSING_QUEUE_CONCURRENCY, 1),
   PROCESSING_QUEUE_MAX_PENDING: parseInteger(process.env.PROCESSING_QUEUE_MAX_PENDING, 200),
   PROCESSING_QUEUE_MAX_ATTEMPTS: parseInteger(process.env.PROCESSING_QUEUE_MAX_ATTEMPTS, 4),
+  // Temporary dependency failures stay durable in QUEUED state and must not
+  // become a manual-review dead letter after the normal retry budget.
+  PROCESSING_QUEUE_DEFER_RETRYABLE_ERRORS: process.env.PROCESSING_QUEUE_DEFER_RETRYABLE_ERRORS !== 'false',
   PROCESSING_QUEUE_BACKOFF_BASE_MS: parseInteger(process.env.PROCESSING_QUEUE_BACKOFF_BASE_MS, 5000),
   PROCESSING_QUEUE_BACKOFF_MAX_MS: parseInteger(process.env.PROCESSING_QUEUE_BACKOFF_MAX_MS, 300000),
   PROCESSING_QUEUE_COOLDOWN_MS: parseNonNegativeInteger(process.env.PROCESSING_QUEUE_COOLDOWN_MS, 250),
