@@ -87,3 +87,53 @@ test('runs direct OCR then authenticated Stripe verification', async () => {
   assert.equal(request.body.email, 'customer@example.com');
   assert.equal(request.body.amount_cents, 1000);
 });
+
+test('recovers a dollar amount from OCR raw text when structured fields are empty', () => {
+  const request = buildStripeVerificationRequest({
+    ocrResult: {
+      raw_text: 'AQ Digital LLC\nCash App Pay\nToday at 1:26 PM\n$100.00\nCompleted',
+      fields: {},
+    },
+    job: {
+      processing_id: 'wa-raw-evidence',
+      caption_email: 'customer@example.com',
+      received_at: '2026-09-22T18:26:00.000Z',
+    },
+  });
+
+  assert.equal(request.amount_cents, 10000);
+  assert.equal(request.minutes, 26);
+  assert.equal(request.payment_hour, 13);
+  assert.equal(request.relative_today, true);
+});
+
+test('verifies an existing weak n8n OCR result through the direct Stripe path', async () => {
+  let request;
+  const result = await require('../../../src/whatsapp/direct-verification-client').verifyStripeEvidenceDirect({
+    ocrResult: {
+      raw_text: 'AQ Digital LLC\n$8.00\nCompleted',
+      fields: {},
+    },
+    processingId: 'wa-evidence-recovery',
+    captionEmail: 'customer@example.com',
+    receivedAt: '2026-09-22T18:26:00.000Z',
+    excludedStripeChargeIds: [],
+  }, {
+    config: {
+      OCR_SERVICE_URL: 'http://ocr:8000',
+      STRIPE_SERVICE_TOKEN: 'internal-token',
+      STRIPE_DIRECT_TIMEOUT_MS: 130000,
+    },
+    httpClient: {
+      post: async (url, body) => {
+        request = { url, body };
+        return { status: 200, data: { status: 'MATCHED', verdict: 'VALID', stripe_charge_id: 'ch-recovered' } };
+      },
+    },
+    logger: { warn() {}, error() {} },
+  });
+
+  assert.equal(result.verification.verdict, 'VALID');
+  assert.equal(request.body.amount_cents, 800);
+  assert.equal(request.body.email, 'customer@example.com');
+});

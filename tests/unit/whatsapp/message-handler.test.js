@@ -382,6 +382,48 @@ test('uses direct OCR and Stripe fallback after a retryable n8n transport failur
   assert.equal(reactions[0].react.key.id, 'direct-fallback-image');
 });
 
+test('recovers weak n8n evidence through direct OCR and Stripe verification', async () => {
+  const reactions = [];
+  const groupId = '1234567890-1234567890@g.us';
+  let recoveryCalls = 0;
+  const handler = createMessageHandler({
+    sendMessage: async (_jid, content) => reactions.push(content),
+  }, {
+    ALLOWED_GROUP_JIDS: [groupId],
+    BOT_REPLY_ENABLED: false,
+    BOT_REACTIONS_ENABLED: true,
+    N8N_ENABLED: true,
+    N8N_DIRECT_FALLBACK_ENABLED: true,
+    STRIPE_VERIFICATION_ENABLED: true,
+    PROCESSING_QUEUE_COOLDOWN_MS: 0,
+  }, logger, {
+    duplicateStore: duplicateStore(),
+    downloadImage: async () => ({ imageBytes: Buffer.from('weak-n8n-image'), mimeType: 'image/png', tempPath: null }),
+    processImageViaN8n: async () => ({
+      provider: 'tesseract',
+      raw_text: 'AQ Digital LLC $100.00 Completed',
+      fields: {},
+      verification: { status: 'NO_MATCH', verdict: 'UNCLEAR', reason_code: 'NO_EXACT_MATCH' },
+    }),
+    processImageDirectFallback: async params => {
+      recoveryCalls += 1;
+      assert.equal(params.captionEmail, 'customer@example.com');
+      return {
+        provider: 'tesseract',
+        raw_text: 'AQ Digital LLC $100.00 Completed',
+        fields: { amount_cents: 10000 },
+        verification: { status: 'MATCHED', verdict: 'VALID', stripe_charge_id: 'ch-recovered-n8n' },
+      };
+    },
+  });
+
+  await handler({ messages: [captionedImageMessage(groupId, 'weak-n8n-evidence')] });
+
+  assert.equal(recoveryCalls, 1);
+  assert.equal(reactions.length, 1);
+  assert.equal(reactions[0].react.text, '✅');
+});
+
 test('sends a captioned image through OCR once per message ID', async () => {
   let ocrCalls = 0;
   let reply;

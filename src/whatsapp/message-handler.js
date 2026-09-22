@@ -91,6 +91,33 @@ function duplicateEvidenceFromResult(result, {
   };
 }
 
+function verificationEvidenceScore(result) {
+  const fields = result?.fields || {};
+  return [
+    Number.isInteger(fields.amount_cents),
+    Boolean(fields.transaction_id),
+    Boolean(fields.customer_name),
+    Boolean(fields.payment_date || (fields.payment_month && fields.payment_day)),
+    fields.payment_hour != null && fields.minutes != null,
+  ].filter(Boolean).length;
+}
+
+function needsEvidenceRecovery(result) {
+  const verdict = result?.verification?.verdict;
+  if (verdict === 'VALID' || verdict === 'DUPLICATE') return false;
+  // A successful n8n response with no usable receipt fields is not a final
+  // Stripe decision. Re-run the private OCR/Stripe path once so an imported
+  // stale workflow or a weak OCR response cannot turn a visible payment into
+  // an avoidable manual review.
+  return verificationEvidenceScore(result) < 2;
+}
+
+function preferRecoveredVerification(original, recovered) {
+  const recoveredVerdict = recovered?.verification?.verdict;
+  if (recoveredVerdict === 'VALID' || recoveredVerdict === 'DUPLICATE') return true;
+  return verificationEvidenceScore(recovered) > verificationEvidenceScore(original);
+}
+
 /**
  * Orchestrates WhatsApp intake and delegates expensive work to a durable,
  * single-worker queue. The queue is deliberately created outside the
@@ -602,6 +629,7 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
       };
 
       let ocrResult;
+      let usedDirectFallback = false;
       if (config.N8N_ENABLED) {
         try {
           ocrResult = await processImageViaN8nFn(eventPayload, { config, logger });
@@ -624,8 +652,49 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
               receivedAt: job.received_at,
               excludedStripeChargeIds: claimedStripeChargeIds,
             }, { config, logger, processImageOCR: processImageOCRFn });
+            usedDirectFallback = true;
           } else {
             throw error;
+          }
+        }
+
+        if (
+          !usedDirectFallback
+          && config.N8N_DIRECT_FALLBACK_ENABLED === true
+          && config.STRIPE_VERIFICATION_ENABLED === true
+          && needsEvidenceRecovery(ocrResult)
+        ) {
+          try {
+            const recoveredResult = await processImageDirectFallbackFn({
+              imageBase64,
+              mimeType: downloadedMime,
+              processingId: job.processing_id,
+              messageId: job.message_id,
+              groupId,
+              senderJid: job.sender_jid,
+              captionEmail: job.caption_email,
+              receivedAt: job.received_at,
+              excludedStripeChargeIds: claimedStripeChargeIds,
+            }, { config, logger, processImageOCR: processImageOCRFn });
+            if (preferRecoveredVerification(ocrResult, recoveredResult)) {
+              logger.warn({
+                processingId: job.processing_id,
+                originalEvidenceScore: verificationEvidenceScore(ocrResult),
+                recoveredEvidenceScore: verificationEvidenceScore(recoveredResult),
+                recoveredVerdict: recoveredResult?.verification?.verdict || null,
+              }, 'Replaced incomplete n8n verification with direct OCR/Stripe evidence recovery');
+              ocrResult = recoveredResult;
+            }
+          } catch (error) {
+            // n8n already produced a bounded result. Recovery is optional; a
+            // recovery outage must not create a dead letter or erase the
+            // original Stripe explanation.
+            logger.warn({
+              processingId: job.processing_id,
+              errorType: error?.name || 'Error',
+              errorCode: error?.code || null,
+              retryable: error?.retryable === true,
+            }, 'Direct OCR/Stripe evidence recovery unavailable; keeping n8n result');
           }
         }
       } else {

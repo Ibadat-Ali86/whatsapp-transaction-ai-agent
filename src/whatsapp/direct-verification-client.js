@@ -37,8 +37,63 @@ function validDate(value) {
   return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null;
 }
 
+function parseAmountCents(value) {
+  if (typeof value !== 'string') return null;
+  const normalized = value.replace(/,/g, '').trim();
+  const match = normalized.match(/^(\d+(?:\.\d{1,2})?)$/);
+  if (!match) return null;
+  const amount = Number(match[1]);
+  if (!Number.isFinite(amount) || amount <= 0 || amount > 1_000_000) return null;
+  return Math.round(amount * 100);
+}
+
+function rawTextEvidence(rawText) {
+  if (typeof rawText !== 'string' || !rawText.trim()) return {};
+  const evidence = {};
+
+  const amountMatch = rawText.match(/\$\s*([0-9][0-9,]*(?:\.\d{1,2})?)/);
+  if (amountMatch) evidence.amount_cents = parseAmountCents(amountMatch[1]);
+
+  const timeMatch = rawText.match(/(?:today|payment|processed|at)[^\n]{0,32}?\b(\d{1,2}):([0-5]\d)\s*([ap]m)?\b/i);
+  if (timeMatch) {
+    const rawHour = Number(timeMatch[1]);
+    const meridiem = (timeMatch[3] || '').toUpperCase();
+    if (meridiem && rawHour >= 1 && rawHour <= 12) {
+      evidence.payment_hour = meridiem === 'AM'
+        ? (rawHour === 12 ? 0 : rawHour)
+        : (rawHour === 12 ? 12 : rawHour + 12);
+    } else if (!meridiem && rawHour >= 0 && rawHour <= 23) {
+      evidence.payment_hour = rawHour;
+    }
+    evidence.minutes = Number(timeMatch[2]);
+  }
+
+  const dateMatch = rawText.match(/\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?\s+(\d{1,2})\b/i);
+  if (dateMatch) {
+    const months = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+    const month = months.indexOf(dateMatch[0].slice(0, 3).toLowerCase()) + 1;
+    if (month >= 1 && month <= 12) {
+      evidence.payment_month = month;
+      evidence.payment_day = Number(dateMatch[1]);
+    }
+  }
+
+  return evidence;
+}
+
+function normalizedFields(ocrResult) {
+  const fields = ocrResult?.fields && typeof ocrResult.fields === 'object'
+    ? { ...ocrResult.fields }
+    : {};
+  const fallback = rawTextEvidence(ocrResult?.raw_text);
+  for (const [key, value] of Object.entries(fallback)) {
+    if (fields[key] === null || fields[key] === undefined || fields[key] === '') fields[key] = value;
+  }
+  return fields;
+}
+
 function buildStripeVerificationRequest({ ocrResult, job, excludedStripeChargeIds = [] }) {
-  const fields = ocrResult?.fields && typeof ocrResult.fields === 'object' ? ocrResult.fields : {};
+  const fields = normalizedFields(ocrResult);
   const captionEmail = validEmail(job?.caption_email);
   const ocrEmail = validEmail(fields.email);
   const emailCandidates = [...new Set([captionEmail, ocrEmail].filter(Boolean))].slice(0, 8);
@@ -73,6 +128,67 @@ function buildStripeVerificationRequest({ ocrResult, job, excludedStripeChargeId
   };
 }
 
+async function verifyStripeEvidenceDirect(params, options = {}) {
+  const clientConfig = options.config || config;
+  const httpClient = options.httpClient || axios;
+  const logger = options.logger || { warn() {}, error() {} };
+  const serviceToken = clientConfig.STRIPE_SERVICE_TOKEN || '';
+  if (!serviceToken) {
+    throw new DirectVerificationError(
+      'Direct OCR/Stripe fallback is not configured',
+      true,
+      { code: 'DIRECT_FALLBACK_NOT_CONFIGURED' },
+    );
+  }
+
+  const stripeRequest = buildStripeVerificationRequest({
+    ocrResult: params.ocrResult,
+    job: {
+      processing_id: params.processingId,
+      caption_email: params.captionEmail,
+      received_at: params.receivedAt,
+    },
+    excludedStripeChargeIds: params.excludedStripeChargeIds,
+  });
+
+  try {
+    const response = await httpClient.post(verificationUrl(clientConfig), stripeRequest, {
+      timeout: clientConfig.STRIPE_DIRECT_TIMEOUT_MS,
+      headers: {
+        'content-type': 'application/json',
+        'x-internal-service-token': serviceToken,
+      },
+    });
+    if (!response || response.status < 200 || response.status >= 300) {
+      const retryable = !response?.status || response.status >= 500 || response.status === 429;
+      throw new DirectVerificationError(
+        `Direct Stripe verification failed (${response?.status || 'network'})`,
+        retryable,
+        { status: response?.status ?? null, code: retryable ? 'DIRECT_STRIPE_RETRYABLE' : 'DIRECT_STRIPE_HTTP_ERROR' },
+      );
+    }
+    if (!response.data || typeof response.data !== 'object' || Array.isArray(response.data)) {
+      throw new DirectVerificationError('Direct Stripe verifier returned an invalid response', true, {
+        code: 'DIRECT_STRIPE_INVALID_RESPONSE',
+      });
+    }
+    logger.warn({ processingId: params.processingId }, 'Used direct Stripe evidence recovery after incomplete n8n verification');
+    return { ...(params.ocrResult || {}), verification: response.data };
+  } catch (error) {
+    if (error instanceof DirectVerificationError) throw error;
+    const status = error?.response?.status ?? null;
+    const retryable = !status || status >= 500 || status === 429;
+    throw new DirectVerificationError(
+      `Direct Stripe verification failed (${status || 'network'})`,
+      retryable,
+      {
+        status,
+        code: error?.code || (retryable ? 'DIRECT_STRIPE_NETWORK_ERROR' : 'DIRECT_STRIPE_HTTP_ERROR'),
+      },
+    );
+  }
+}
+
 function verificationUrl(clientConfig) {
   return new URL('/api/v1/verification/stripe', clientConfig.OCR_SERVICE_URL).toString();
 }
@@ -105,56 +221,18 @@ async function processImageDirectFallback(params, options = {}) {
     captionEmail: params.captionEmail,
     excludedStripeChargeIds: params.excludedStripeChargeIds,
   });
-  const stripeRequest = buildStripeVerificationRequest({
+  return verifyStripeEvidenceDirect({
     ocrResult,
-    job: {
-      processing_id: params.processingId,
-      caption_email: params.captionEmail,
-      received_at: params.receivedAt,
-    },
+    processingId: params.processingId,
+    captionEmail: params.captionEmail,
+    receivedAt: params.receivedAt,
     excludedStripeChargeIds: params.excludedStripeChargeIds,
-  });
-
-  try {
-    const response = await httpClient.post(verificationUrl(clientConfig), stripeRequest, {
-      timeout: clientConfig.STRIPE_DIRECT_TIMEOUT_MS,
-      headers: {
-        'content-type': 'application/json',
-        'x-internal-service-token': serviceToken,
-      },
-    });
-    if (!response || response.status < 200 || response.status >= 300) {
-      const retryable = !response?.status || response.status >= 500 || response.status === 429;
-      throw new DirectVerificationError(
-        `Direct Stripe verification failed (${response?.status || 'network'})`,
-        retryable,
-        { status: response?.status ?? null, code: retryable ? 'DIRECT_STRIPE_RETRYABLE' : 'DIRECT_STRIPE_HTTP_ERROR' },
-      );
-    }
-    if (!response.data || typeof response.data !== 'object' || Array.isArray(response.data)) {
-      throw new DirectVerificationError('Direct Stripe verifier returned an invalid response', true, {
-        code: 'DIRECT_STRIPE_INVALID_RESPONSE',
-      });
-    }
-    logger.warn({ processingId: params.processingId }, 'Used direct OCR/Stripe fallback after n8n transport failure');
-    return { ...ocrResult, verification: response.data };
-  } catch (error) {
-    if (error instanceof DirectVerificationError) throw error;
-    const status = error?.response?.status ?? null;
-    const retryable = !status || status >= 500 || status === 429;
-    throw new DirectVerificationError(
-      `Direct Stripe verification failed (${status || 'network'})`,
-      retryable,
-      {
-        status,
-        code: error?.code || (retryable ? 'DIRECT_STRIPE_NETWORK_ERROR' : 'DIRECT_STRIPE_HTTP_ERROR'),
-      },
-    );
-  }
+  }, { config: clientConfig, httpClient, logger });
 }
 
 module.exports = {
   DirectVerificationError,
   buildStripeVerificationRequest,
+  verifyStripeEvidenceDirect,
   processImageDirectFallback,
 };
