@@ -350,6 +350,38 @@ test('shows the canonical Stripe identity when a caption email was mistyped', as
   assert.deepEqual(replies[1], { react: { text: '✅', key: message.key } });
 });
 
+test('uses direct OCR and Stripe fallback after a retryable n8n transport failure', async () => {
+  const reactions = [];
+  const groupId = '1234567890-1234567890@g.us';
+  const handler = createMessageHandler({
+    sendMessage: async (_jid, content) => reactions.push(content),
+  }, {
+    ALLOWED_GROUP_JIDS: [groupId],
+    BOT_REPLY_ENABLED: false,
+    BOT_REACTIONS_ENABLED: true,
+    N8N_ENABLED: true,
+    N8N_DIRECT_FALLBACK_ENABLED: true,
+    PROCESSING_QUEUE_COOLDOWN_MS: 0,
+  }, logger, {
+    duplicateStore: duplicateStore(),
+    downloadImage: async () => ({ imageBytes: Buffer.from('fallback-image'), mimeType: 'image/png', tempPath: null }),
+    processImageViaN8n: async () => {
+      const error = new Error('n8n webhook request failed (network: timeout)');
+      error.retryable = true;
+      throw error;
+    },
+    processImageDirectFallback: async () => ({
+      fields: { amount_cents: 1000 },
+      verification: { verdict: 'VALID', stripe_charge_id: 'ch-direct-fallback' },
+    }),
+  });
+
+  await handler({ messages: [captionedImageMessage(groupId, 'direct-fallback-image')] });
+  assert.equal(reactions.length, 1);
+  assert.equal(reactions[0].react.text, '✅');
+  assert.equal(reactions[0].react.key.id, 'direct-fallback-image');
+});
+
 test('sends a captioned image through OCR once per message ID', async () => {
   let ocrCalls = 0;
   let reply;

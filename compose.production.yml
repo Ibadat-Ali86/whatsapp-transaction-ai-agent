@@ -86,7 +86,9 @@ services:
       ocr:
         condition: service_healthy
       n8n:
-        condition: service_healthy
+        # The bot can fail over to the private OCR/Stripe path when n8n is
+        # unavailable; the bot performs the health gate in application code.
+        condition: service_started
     volumes:
       - bot_auth:/app/auth
       - bot_data:/app/data

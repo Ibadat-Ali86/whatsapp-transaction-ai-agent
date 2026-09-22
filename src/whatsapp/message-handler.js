@@ -10,6 +10,7 @@ const {
 const { getImageCaption, getStandaloneTextEmail, normalizeCaptionEmail } = require('./caption-email');
 const { createIdempotencyStore } = require('./idempotency-store');
 const { processImageViaN8n } = require('./n8n-client');
+const { processImageDirectFallback } = require('./direct-verification-client');
 const fs = require('fs').promises;
 const crypto = require('crypto');
 const { isAllowedGroupJid, hashGroupJid } = require('./group-access');
@@ -101,6 +102,7 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
   const downloadImageFn = dependencies.downloadImage || downloadImage;
   const processImageOCRFn = dependencies.processImageOCR || processImageOCR;
   const processImageViaN8nFn = dependencies.processImageViaN8n || processImageViaN8n;
+  const processImageDirectFallbackFn = dependencies.processImageDirectFallback || processImageDirectFallback;
   const idempotencyStore = dependencies.idempotencyStore || createIdempotencyStore();
   const duplicateStore = dependencies.duplicateStore || createDuplicateStore({
     filePath: config.DUPLICATE_STORE_PATH,
@@ -599,9 +601,35 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
         image: { mime_type: downloadedMime, base64: imageBase64 },
       };
 
-      const ocrResult = config.N8N_ENABLED
-        ? await processImageViaN8nFn(eventPayload, { config, logger })
-        : await processImageOCRFn({
+      let ocrResult;
+      if (config.N8N_ENABLED) {
+        try {
+          ocrResult = await processImageViaN8nFn(eventPayload, { config, logger });
+        } catch (error) {
+          if (config.N8N_DIRECT_FALLBACK_ENABLED === true && error?.retryable === true) {
+            logger.warn({
+              processingId: job.processing_id,
+              errorType: error?.name || 'Error',
+              errorCode: error?.code || null,
+              errorMessage: error?.message || null,
+            }, 'n8n transport unavailable; attempting direct OCR/Stripe fallback');
+            ocrResult = await processImageDirectFallbackFn({
+              imageBase64,
+              mimeType: downloadedMime,
+              processingId: job.processing_id,
+              messageId: job.message_id,
+              groupId,
+              senderJid: job.sender_jid,
+              captionEmail: job.caption_email,
+              receivedAt: job.received_at,
+              excludedStripeChargeIds: claimedStripeChargeIds,
+            }, { config, logger, processImageOCR: processImageOCRFn });
+          } else {
+            throw error;
+          }
+        }
+      } else {
+        ocrResult = await processImageOCRFn({
           imageBase64,
           mimeType: downloadedMime,
           processingId: job.processing_id,
@@ -611,6 +639,7 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
           captionEmail: job.caption_email,
           excludedStripeChargeIds: claimedStripeChargeIds,
         });
+      }
 
       const evidence = duplicateEvidenceFromResult(ocrResult, {
         fallbackEmail: job.caption_email,

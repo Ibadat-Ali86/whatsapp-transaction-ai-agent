@@ -24,13 +24,16 @@ const config = {
   N8N_WEBHOOK_PATH: process.env.N8N_WEBHOOK_PATH || '/webhook/whatsapp-screenshot',
   N8N_WEBHOOK_URL: process.env.N8N_WEBHOOK_URL || '',
   N8N_WEBHOOK_TOKEN: process.env.N8N_WEBHOOK_TOKEN || '',
+  // Private OCR/Stripe failover for retryable n8n transport failures.
+  N8N_DIRECT_FALLBACK_ENABLED: process.env.N8N_DIRECT_FALLBACK_ENABLED !== 'false',
+  STRIPE_SERVICE_TOKEN: process.env.STRIPE_SERVICE_TOKEN || '',
+  STRIPE_DIRECT_TIMEOUT_MS: parseInteger(process.env.STRIPE_DIRECT_TIMEOUT_MS, 130000),
   N8N_HEALTH_TIMEOUT_MS: parseInteger(process.env.N8N_HEALTH_TIMEOUT_MS, 5000),
-  // The n8n Stripe node is allowed to perform bounded reconciliation and is
-  // configured for 120s in the production workflow. Keep the bot deadline
-  // slightly longer so a slow-but-valid structured Stripe result is not
-  // converted into a transport failure or dead-letter item.
-  N8N_TIMEOUT_MS: parseInteger(process.env.N8N_TIMEOUT_MS, 150000),
-  N8N_RETRY_ATTEMPTS: parseInteger(process.env.N8N_RETRY_ATTEMPTS, 2),
+  // OCR can run for 90s and the bounded Stripe node for 120s sequentially.
+  // Keep the end-to-end webhook deadline above their combined budget so a
+  // slow-but-valid result is not converted into a transport failure.
+  N8N_TIMEOUT_MS: parseInteger(process.env.N8N_TIMEOUT_MS, 240000),
+  N8N_RETRY_ATTEMPTS: parseNonNegativeInteger(process.env.N8N_RETRY_ATTEMPTS, 2),
   STRIPE_VERIFICATION_ENABLED: process.env.STRIPE_VERIFICATION_ENABLED === 'true',
   STRIPE_TIMEZONE: process.env.STRIPE_TIMEZONE || 'UTC',
   REQUIRE_EMAIL_CAPTION: process.env.REQUIRE_EMAIL_CAPTION !== 'false',

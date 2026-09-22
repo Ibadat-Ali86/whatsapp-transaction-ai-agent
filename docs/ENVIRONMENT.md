@@ -26,14 +26,23 @@ such as an amount; multiple different addresses remain ambiguous.
 N8N_BASE_URL=http://localhost:5678
 N8N_WEBHOOK_PATH=/webhook/whatsapp-screenshot
 N8N_HEALTH_TIMEOUT_MS=5000
-N8N_TIMEOUT_MS=150000
-N8N_RETRY_ATTEMPTS=2
+N8N_TIMEOUT_MS=240000
+N8N_RETRY_ATTEMPTS=0
+N8N_DIRECT_FALLBACK_ENABLED=true
+STRIPE_SERVICE_TOKEN=
+STRIPE_DIRECT_TIMEOUT_MS=130000
 
 LOG_LEVEL=INFO
 
 `STRIPE_VERIFICATION_ENABLED=true` is required in the Baileys process when the
 v2 n8n workflow should call Stripe. It defaults to false and does not expose
 the Stripe secret.
+
+When n8n has a retryable transport failure, the bot can use the private OCR
+service directly and call its authenticated Stripe verifier with
+`STRIPE_SERVICE_TOKEN`. This is the internal service token, not the Stripe
+secret key. The fallback is fail-closed: it approves only a unique
+Stripe-confirmed charge and leaves technical failures queued for retry.
 
 `BOT_REACTIONS_ENABLED=true` enables reaction-first results. Clear valid and
 failed/unclear results react to the original screenshot. `✅` is reserved for

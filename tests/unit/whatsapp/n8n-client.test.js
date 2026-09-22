@@ -40,6 +40,31 @@ test('sends an authenticated event without logging or changing the payload', asy
   assert.equal(request.options.headers['x-webhook-token'], 'test-token');
 });
 
+test('keeps the logger receiver when recording a successful n8n response', async () => {
+  const logger = {
+    info(entry, message) {
+      assert.equal(this, logger);
+      assert.equal(message, 'n8n webhook response normalized');
+      assert.equal(entry.status, 200);
+    },
+  };
+  const result = await processImageViaN8n({ processing_id: 'wa-logger-context' }, {
+    config: {
+      N8N_BASE_URL: 'http://localhost:5678',
+      N8N_WEBHOOK_PATH: '/webhook/test',
+      N8N_RETRY_ATTEMPTS: 0,
+    },
+    logger,
+    httpClient: {
+      post: async () => ({
+        status: 200,
+        data: { provider: 'tesseract', fields: { amount_cents: 1000 } },
+      }),
+    },
+  });
+  assert.equal(result.fields.amount_cents, 1000);
+});
+
 test('normalizes supported n8n webhook response envelopes', () => {
   const result = { provider: 'tesseract', fields: { amount_cents: 1000 } };
   const verification = { status: 'CONFIRMED', verdict: 'VALID', stripe_charge_id: 'ch-valid' };
@@ -125,4 +150,28 @@ test('reports n8n health as unavailable on connection failure', async () => {
   });
 
   assert.equal(ready, false);
+});
+
+test('preserves a safe transport cause for diagnosing retryable n8n failures', async () => {
+  await assert.rejects(
+    processImageViaN8n({ processing_id: 'wa-network-failure' }, {
+      config: {
+        N8N_BASE_URL: 'http://localhost:5678',
+        N8N_WEBHOOK_PATH: '/webhook/test',
+        N8N_TIMEOUT_MS: 1000,
+        N8N_RETRY_ATTEMPTS: 0,
+      },
+      httpClient: {
+        post: async () => {
+          const error = new Error('connect ECONNRESET http://n8n:5678/webhook/test');
+          error.code = 'ECONNRESET';
+          throw error;
+        },
+      },
+    }),
+    error => error.retryable === true
+      && error.code === 'ECONNRESET'
+      && error.causeMessage === 'connect ECONNRESET <url>'
+      && error.message === 'n8n webhook request failed (network: connect ECONNRESET <url>)',
+  );
 });

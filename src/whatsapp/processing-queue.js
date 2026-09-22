@@ -98,7 +98,7 @@ function createProcessingQueue({
     return error.code === 'ECONNABORTED'
       || error.code === 'ETIMEDOUT'
       || error.code === 'ECONNRESET'
-      || /n8n webhook request failed \(network\)/i.test(error.message || '');
+      || /n8n webhook request failed \(network(?:[:)]|$)/i.test(error.message || '');
   };
 
   const load = () => {
@@ -256,6 +256,7 @@ function createProcessingQueue({
           deferredUntilRecovered: deferRetryable,
           errorType: error?.name || 'Error',
           errorCode: error?.code || null,
+          errorMessage: error?.message || null,
         }, deferRetryable
           ? 'Processing queue job deferred until dependency recovers'
           : 'Processing queue job scheduled for retry');

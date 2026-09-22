@@ -118,7 +118,8 @@ n8n containers must never receive `STRIPE_SECRET_KEY`.
 Edit only the environment files on the Droplet:
 
 - `bot.env`: exact single-group `WHATSAPP_ALLOWED_GROUP_JIDS`, n8n token,
-  and queue settings.
+  queue settings, and the internal `STRIPE_SERVICE_TOKEN` if direct fallback
+  is enabled.
 - `ocr.env`: Stripe live mode, restricted read-only secret, Stripe service
   token, and approved AI provider settings.
 - `n8n.env`: n8n encryption key and editor URL settings.
@@ -126,6 +127,9 @@ Edit only the environment files on the Droplet:
 The production Compose file overrides service URLs to use Docker DNS:
 `http://ocr:8000` and `http://n8n:5678`. Do not use `localhost` between
 containers.
+The bot's optional direct fallback calls `http://ocr:8000` with the same
+internal service token used by the Stripe verifier; it never receives the
+Stripe secret key.
 The Compose file pins n8n to the stable v1 image `n8nio/n8n:1.123.80` rather
 than a floating `latest` tag. Verify workflow import and authentication on the
 Droplet before activating live processing.

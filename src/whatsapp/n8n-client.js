@@ -9,6 +9,7 @@ class N8nServiceError extends Error {
     this.status = details.status ?? null;
     this.code = details.code ?? null;
     this.causeCode = details.causeCode ?? null;
+    this.causeMessage = details.causeMessage ?? null;
     this.timeoutMs = details.timeoutMs ?? null;
   }
 }
@@ -100,6 +101,16 @@ function isRetryableError(error) {
   return !status || status >= 500 || status === 429;
 }
 
+function safeTransportMessage(error) {
+  const raw = error?.message || error?.cause?.message || '';
+  if (!raw) return null;
+  return String(raw)
+    .replace(/https?:\/\/[^\s)]+/gi, '<url>')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 240) || null;
+}
+
 function wait(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -163,17 +174,23 @@ async function processImageViaN8n(payload, options = {}) {
           { status: response?.status ?? null, code },
         );
       }
-      (logger.info || (() => {}))({
-        status: response?.status ?? null,
-        response_kind: Array.isArray(normalized) ? 'array' : typeof normalized,
-        ocr_provider: typeof normalized.provider === 'string' ? normalized.provider : null,
-        ocr_fields_present: Object.prototype.hasOwnProperty.call(normalized, 'fields'),
-        ocr_field_keys: normalized.fields && typeof normalized.fields === 'object'
-          ? Object.keys(normalized.fields).filter(key => normalized.fields[key] != null).slice(0, 16)
-          : [],
-        verification_present: Boolean(normalized.verification || hasVerificationDecision(normalized)),
-        verification_reason: normalized.verification?.reason_code || normalized.reason_code || null,
-      }, 'n8n webhook response normalized');
+      // Preserve the logger receiver. Pino methods require their original
+      // context; invoking logger.info as a detached function throws
+      // Symbol(pino.msgPrefix), which previously masqueraded as an n8n
+      // network failure after a successful webhook response.
+      if (typeof logger.info === 'function') {
+        logger.info({
+          status: response?.status ?? null,
+          response_kind: Array.isArray(normalized) ? 'array' : typeof normalized,
+          ocr_provider: typeof normalized.provider === 'string' ? normalized.provider : null,
+          ocr_fields_present: Object.prototype.hasOwnProperty.call(normalized, 'fields'),
+          ocr_field_keys: normalized.fields && typeof normalized.fields === 'object'
+            ? Object.keys(normalized.fields).filter(key => normalized.fields[key] != null).slice(0, 16)
+            : [],
+          verification_present: Boolean(normalized.verification || hasVerificationDecision(normalized)),
+          verification_reason: normalized.verification?.reason_code || normalized.reason_code || null,
+        }, 'n8n webhook response normalized');
+      }
       return normalized;
     } catch (error) {
       const retryable = error instanceof N8nServiceError
@@ -185,12 +202,13 @@ async function processImageViaN8n(payload, options = {}) {
         const status = error?.response?.status || 'network';
         const code = error?.code || error?.cause?.code || null;
         throw new N8nServiceError(
-          `n8n webhook request failed (${status})`,
+          `n8n webhook request failed (${status}${status === 'network' && safeTransportMessage(error) ? `: ${safeTransportMessage(error)}` : ''})`,
           retryable,
           {
             status: error?.response?.status ?? null,
             code,
             causeCode: error?.cause?.code ?? null,
+            causeMessage: safeTransportMessage(error),
             timeoutMs: clientConfig.N8N_TIMEOUT_MS ?? null,
           },
         );
@@ -201,13 +219,14 @@ async function processImageViaN8n(payload, options = {}) {
         retry_in_ms: 1000,
         status: error?.response?.status ?? null,
         error_code: error?.code || error?.cause?.code || null,
+        error_message: safeTransportMessage(error),
         timeout_ms: clientConfig.N8N_TIMEOUT_MS ?? null,
       }, 'n8n webhook request failed; retrying');
       await wait(1000);
     }
   }
 
-  throw new N8nServiceError('n8n webhook request failed', true);
+  throw new N8nServiceError('n8n webhook request failed (network)', true);
 }
 
 module.exports = {

@@ -150,7 +150,9 @@ terminating the workflow or dead-lettering the screenshot. Stripe
 list/search reconciliation may require bounded fallback requests for
 captionless receipts; a timeout is a technical verification failure and must
 never be converted into an invalid-payment decision. The WhatsApp bot's
-`N8N_TIMEOUT_MS` must remain longer than this node timeout.
+`N8N_TIMEOUT_MS` must remain longer than the combined OCR and Stripe node
+timeouts because those calls run sequentially. The production baseline is
+240 seconds for a 90-second OCR timeout plus a 120-second Stripe timeout.
 
 ## Idempotency
 

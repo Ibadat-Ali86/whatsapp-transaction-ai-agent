@@ -74,14 +74,25 @@ Auth Dir: ${config.AUTH_DIR}/
     }
     const n8nReady = await checkN8nServiceHealth({ config });
     if (!n8nReady) {
-      logger.error(
-        { n8nBaseUrl: config.N8N_BASE_URL },
-        'n8n is enabled but the service is not reachable; start n8n and activate the workflow before starting the WhatsApp bot',
-      );
-      process.exitCode = 1;
-      return;
+      if (config.N8N_DIRECT_FALLBACK_ENABLED && config.STRIPE_SERVICE_TOKEN) {
+        logger.warn(
+          { n8nBaseUrl: config.N8N_BASE_URL },
+          'n8n is unavailable; starting with direct OCR/Stripe fallback enabled',
+        );
+      } else {
+        logger.error(
+          { n8nBaseUrl: config.N8N_BASE_URL },
+          'n8n is unavailable and direct OCR/Stripe fallback is not configured; refusing to start without a payment-verification path',
+        );
+        process.exitCode = 1;
+        return;
+      }
+    } else {
+      logger.info('n8n service is ready.');
     }
-    logger.info('n8n service is ready.');
+    if (config.N8N_DIRECT_FALLBACK_ENABLED && !config.STRIPE_SERVICE_TOKEN) {
+      logger.warn('Direct OCR/Stripe fallback is enabled but STRIPE_SERVICE_TOKEN is missing; retryable n8n failures will remain queued until configured');
+    }
   }
 
   // Keep one queue/handler across Baileys socket replacements. Recreating the
