@@ -205,6 +205,7 @@ test('processes a forwarded view-once image wrapped by WhatsApp', async () => {
     ALLOWED_GROUP_JIDS: [groupId],
     BOT_REPLY_ENABLED: false,
     BOT_REACTIONS_ENABLED: true,
+    BOT_PROCESSING_REACTIONS_ENABLED: true,
     N8N_ENABLED: false,
   }, logger, {
     duplicateStore: duplicateStore(),
@@ -217,7 +218,10 @@ test('processes a forwarded view-once image wrapped by WhatsApp', async () => {
 
   await handler({ messages: [message] });
 
-  assert.deepEqual(events, [{ react: { text: '✅', key: message.key } }]);
+  assert.deepEqual(events, [
+    { react: { text: '⏳', key: message.key } },
+    { react: { text: '✅', key: message.key } },
+  ]);
 });
 
 test('associates a same-sender email message that follows a captionless image', async () => {

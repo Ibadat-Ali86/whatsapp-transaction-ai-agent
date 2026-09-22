@@ -2,7 +2,10 @@ const MESSAGE_WRAPPER_KEYS = [
   'ephemeralMessage',
   'viewOnceMessage',
   'viewOnceMessageV2',
+  'viewOnceMessageV2Extension',
   'documentWithCaptionMessage',
+  'editedMessage',
+  'albumMessage',
 ];
 
 function unwrapMessageContent(content) {

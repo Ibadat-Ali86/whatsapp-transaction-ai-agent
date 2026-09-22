@@ -53,6 +53,7 @@ const config = {
   MAX_IMAGE_SIZE_MB: parseInteger(process.env.MAX_IMAGE_SIZE_MB, 10),
   BOT_REPLY_ENABLED: process.env.BOT_REPLY_ENABLED !== 'false',
   BOT_REACTIONS_ENABLED: process.env.BOT_REACTIONS_ENABLED !== 'false',
+  BOT_PROCESSING_REACTIONS_ENABLED: process.env.BOT_PROCESSING_REACTIONS_ENABLED !== 'false',
 };
 
 if (!config.ALLOWED_GROUP_JIDS.length) {

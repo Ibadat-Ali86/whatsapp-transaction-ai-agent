@@ -580,8 +580,18 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
         };
 
         try {
-          await queue.enqueue(job);
+          const queuedResult = queue.enqueue(job);
           idempotencyStore.complete(idempotencyKey);
+          if (config.BOT_PROCESSING_REACTIONS_ENABLED === true) {
+            try {
+              await sendReaction(groupId, msg, '⏳');
+            } catch (error) {
+              // Intake acknowledgment is best-effort and must never turn a
+              // queued payment into a retry or alter its financial verdict.
+              logger.warn({ processingId, err: error }, 'Unable to send processing acknowledgment reaction');
+            }
+          }
+          await queuedResult;
         } catch (error) {
           idempotencyStore.release(idempotencyKey);
           if (error instanceof QueueFullError) {

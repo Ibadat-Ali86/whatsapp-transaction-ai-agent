@@ -37,6 +37,8 @@ the Stripe secret.
 failed/unclear results react to the original screenshot. `✅` is reserved for
 a unique eligible Stripe match; every non-duplicate non-valid result uses
 `❌` and, when bot replies are enabled, includes a concise explanation.
+`BOT_PROCESSING_REACTIONS_ENABLED=true` adds an immediate `⏳` acknowledgment
+while OCR/Stripe verification is running; it is never a payment verdict.
 Captionless valid results and valid results whose caption identity was
 corrected by Stripe also send a detailed reply containing the canonical
 Stripe-recovered email so the group can see which customer was matched.
