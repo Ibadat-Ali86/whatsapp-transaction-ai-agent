@@ -228,5 +228,7 @@ test('n8n v2 code nodes validate optional captions and prepare recoverable Strip
     confidence: 0.55,
     fields: { amount_cents: 1500, minutes: '33', payment_hour: 18 },
   }, { references: { 'Validate Event': { ...captionless, received_at: '2026-09-16T18:00:00.000Z', stripe_timezone: 'America/Chicago' } } })[0].json;
-  assert.equal(relativeToday.stripe_request.payment_date, '2026-09-16');
+  assert.equal(relativeToday.stripe_request.payment_date, null);
+  assert.equal(relativeToday.stripe_request.relative_today, true);
+  assert.equal(relativeToday.stripe_request.received_at, '2026-09-16T18:00:00.000Z');
 });

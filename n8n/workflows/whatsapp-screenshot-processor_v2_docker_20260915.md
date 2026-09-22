@@ -2,7 +2,7 @@
 
 - Version: 2
 - Date: 2026-09-15
-- Change: Docker-network URLs for the production Compose deployment
+- Change: Docker-network URLs plus relative-receipt and evidence recovery safeguards
 
 ## What changed
 
@@ -20,8 +20,10 @@ preferred lookup hint. OCR amount/date/time evidence is passed to Stripe as
 bounded recovery evidence when the caption is missing, malformed, or does not
 match. Textual dates such as `Aug 14` become a month/day constraint. Stripe
 supplies canonical amount, date, time, customer email, name, and status;
-recovery is approved only for one eligible charge. Ambiguous, insufficient,
-and conflicting matches remain non-approving.
+recovery is approved only for one eligible charge. A receipt showing `Today`
+is passed as relative evidence with the WhatsApp receive timestamp instead of
+being assigned a guessed Stripe-account date. Ambiguous, insufficient, and
+conflicting matches remain non-approving.
 
 For groups that may contain receipts from different time zones, leave
 `STRIPE_SCREENSHOT_TIMEZONE` empty. The verifier then ignores the screenshot

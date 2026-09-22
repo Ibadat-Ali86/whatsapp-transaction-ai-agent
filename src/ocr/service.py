@@ -93,6 +93,8 @@ class StripeVerificationRequest(BaseModel):
     payment_hour: Optional[int] = Field(default=None, ge=0, le=23)
     payment_month: Optional[int] = Field(default=None, ge=1, le=12)
     payment_day: Optional[int] = Field(default=None, ge=1, le=31)
+    relative_today: bool = False
+    received_at: Optional[datetime] = None
     excluded_stripe_charge_ids: list[str] = Field(default_factory=list, max_length=2048)
     currency: str = Field(default="usd", min_length=3, max_length=3)
     payment_method_type: str = Field(default="cashapp", min_length=1, max_length=32)
@@ -311,6 +313,8 @@ async def verify_stripe(
         payment_hour=request.payment_hour,
         payment_month=request.payment_month,
         payment_day=request.payment_day,
+        relative_today=request.relative_today,
+        received_at=request.received_at,
         excluded_stripe_charge_ids=tuple(request.excluded_stripe_charge_ids),
         currency=request.currency,
         payment_method_type=request.payment_method_type,

@@ -114,10 +114,12 @@ STRIPE_TIMEZONE=America/Chicago
 # charge (or one fresh charge after previously claimed IDs are removed). Leave
 # empty for mixed receipt zones.
 STRIPE_SCREENSHOT_TIMEZONE=
-# A receipt saying "Today" is resolved from the WhatsApp receive timestamp in
-# STRIPE_TIMEZONE by the n8n evidence-preparation node. This avoids scanning
-# the whole account for a current-day captionless payment while keeping the
-# final match anchored to Stripe's created timestamp.
+# A receipt saying "Today" is relative to the sender's phone. The n8n
+# evidence-preparation node passes it as relative evidence with received_at
+# instead of manufacturing a Stripe-account calendar date. The verifier uses
+# a bounded receive-time window, then requires the exact Stripe eligibility
+# and identity checks. This avoids both timezone false negatives and an
+# unbounded high-volume amount scan.
 # Email-based verification queries the Stripe customer (without an OCR-date
 # restriction) first, then uses a bounded day/lookback scan only for recovery.
 # This avoids rejecting valid receipts whose displayed date crosses a timezone

@@ -288,6 +288,64 @@ async def test_captionless_lookup_handles_receipt_local_time_without_configured_
 
 
 @pytest.mark.asyncio
+async def test_relative_today_uses_receive_window_after_customer_pagination():
+    receive_time = datetime(2026, 9, 9, 15, 0, tzinfo=timezone.utc)
+
+    def responses(request):
+        if request.url.path == "/v1/customers":
+            return httpx.Response(200, json={"data": [{"id": "cus_customer", "email": "customer@example.com"}]})
+        if request.url.path == "/v1/charges" and request.url.params.get("customer") == "cus_customer":
+            return httpx.Response(200, json={"data": [charge("ch_recent_page")], "has_more": True})
+        assert request.url.path == "/v1/charges/search"
+        assert "created>" in request.url.params["query"]
+        assert "created<" in request.url.params["query"]
+        return httpx.Response(200, json={"data": [charge(receipt_email="customer@example.com")], "has_more": False})
+
+    result, _ = await verify_with_responses(
+        responses,
+        max_pages=1,
+        evidence_value=PaymentEvidence(
+            email="customer@example.com",
+            amount_cents=2500,
+            minutes=31,
+            payment_hour=14,
+            relative_today=True,
+            received_at=receive_time,
+        ),
+    )
+
+    assert result.verdict == "VALID"
+    assert result.reason_code == "EXACT_SINGLE_MATCH"
+
+
+@pytest.mark.asyncio
+async def test_unique_date_and_customer_name_recovers_when_minute_is_misread():
+    def responses(request):
+        if request.url.path == "/v1/customers":
+            return httpx.Response(200, json={"data": [{"id": "cus_customer", "email": "customer@example.com"}]})
+        if request.url.path == "/v1/charges/search":
+            return httpx.Response(200, json={"data": [], "has_more": False})
+        assert request.url.path == "/v1/charges"
+        return httpx.Response(200, json={
+            "data": [charge(
+                "ch_name_recovery",
+                created=stripe_timestamp(hour=14, minute=12),
+                billing_details={"name": "Jenny Waters"},
+            )],
+            "has_more": False,
+        })
+
+    result, _ = await verify_with_responses(
+        responses,
+        evidence_value=evidence(customer_name="jenny waters", minutes=31),
+    )
+
+    assert result.verdict == "VALID"
+    assert result.reason_code == "IDENTITY_RECOVERED_FROM_STRIPE"
+    assert result.stripe_charge_id == "ch_name_recovery"
+
+
+@pytest.mark.asyncio
 async def test_captionless_lookup_can_enforce_known_receipt_timezone():
     charge_created = int(datetime(2026, 8, 14, 14, 23, tzinfo=timezone.utc).timestamp())
 
@@ -880,6 +938,55 @@ async def test_customer_name_disambiguates_same_email_amount_and_time_safely():
     assert result.verdict == "VALID"
     assert result.stripe_charge_id == "ch_jenny"
     assert result.matched_transaction["customer_name"] == "Jenny Waters"
+
+
+@pytest.mark.asyncio
+async def test_customer_name_disambiguation_ignores_ocr_edge_punctuation():
+    def responses(request):
+        if request.url.path == "/v1/customers":
+            return httpx.Response(200, json={"data": [{"id": "cus_customer", "email": "customer@example.com"}]})
+        assert request.url.path == "/v1/charges"
+        return httpx.Response(200, json={
+            "data": [
+                charge("ch_rachael", billing_details={"name": "Rachael Matthews"}),
+                charge("ch_other", billing_details={"name": "Other Customer"}),
+            ],
+            "has_more": False,
+        })
+
+    result, _ = await verify_with_responses(
+        responses,
+        evidence_value=evidence(customer_name="Rachael Matthews."),
+    )
+
+    assert result.verdict == "VALID"
+    assert result.stripe_charge_id == "ch_rachael"
+
+
+@pytest.mark.asyncio
+async def test_date_and_customer_name_tie_stays_review_required():
+    def responses(request):
+        if request.url.path == "/v1/customers":
+            return httpx.Response(200, json={"data": [{"id": "cus_customer", "email": "customer@example.com"}]})
+        if request.url.path == "/v1/charges/search":
+            return httpx.Response(200, json={"data": [], "has_more": False})
+        assert request.url.path == "/v1/charges"
+        return httpx.Response(200, json={
+            "data": [
+                charge("ch_name_one", created=stripe_timestamp(hour=10, minute=12), billing_details={"name": "Jenny Waters"}),
+                charge("ch_name_two", created=stripe_timestamp(hour=16, minute=12), billing_details={"name": "Jenny Waters"}),
+            ],
+            "has_more": False,
+        })
+
+    result, _ = await verify_with_responses(
+        responses,
+        evidence_value=evidence(customer_name="Jenny Waters", minutes=31),
+    )
+
+    assert result.verdict == "UNCLEAR"
+    assert result.reason_code == "MULTIPLE_DATE_NAME_MATCHES"
+    assert result.candidate_count == 2
 
 
 @pytest.mark.asyncio

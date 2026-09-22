@@ -72,7 +72,10 @@ Phase 2 Step 1 contract:
   Textual receipt dates such as `Aug 14` are sent as `payment_month` and
   `payment_day`; when `received_at` and the configured Stripe timezone make
   the year unambiguous, v2 also derives a bounded `payment_date` for the
-  lookup. For multi-group operation, leave
+  lookup. A receipt saying `Today` is kept as relative evidence and is not
+  converted into a guessed account-timezone date. The verifier instead uses a
+  bounded window around `received_at`, then applies the exact amount, minute,
+  status, currency, method, and identity checks. For multi-group operation, leave
   `STRIPE_SCREENSHOT_TIMEZONE` empty so receipt hours from different local
   zones cannot cause a false rejection; amount, date/month-day, and minute
   constraints remain fail-closed filters. Configure that timezone only when

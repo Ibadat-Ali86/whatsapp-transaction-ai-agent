@@ -71,6 +71,12 @@ class PaymentEvidence:
     payment_hour: Optional[int] = None
     payment_month: Optional[int] = None
     payment_day: Optional[int] = None
+    # A receipt saying "Today" is relative to the sender's device, not
+    # necessarily to the Stripe account timezone. Do not turn it into a
+    # guessed calendar date; the caller may still use the exact amount/time
+    # and identity fields to find one eligible charge.
+    relative_today: bool = False
+    received_at: Optional[datetime] = None
     # Stripe charge IDs already claimed by the single WhatsApp worker. They
     # are used only to resolve a multi-match when exactly one fresh charge
     # remains; a sole claimed match is intentionally preserved so the Node
@@ -240,7 +246,9 @@ def normalize_description(value: str) -> str:
 
 
 def normalize_customer_name(value: str) -> str:
-    normalized = " ".join(value.strip().split()).casefold()
+    # Mobile OCR often includes a terminal period/comma after a visible name.
+    # Remove only edge punctuation; do not use fuzzy or partial matching.
+    normalized = " ".join(value.strip().strip(".,;:!?-").split()).casefold()
     if not normalized or len(normalized) > 256:
         raise ValueError("invalid customer name")
     return normalized
@@ -669,8 +677,10 @@ class StripeVerifier:
     def _charge_customer_name(charge: dict[str, Any]) -> Optional[str]:
         billing_details = charge.get("billing_details")
         if isinstance(billing_details, dict) and isinstance(billing_details.get("name"), str):
-            value = " ".join(billing_details["name"].split()).casefold()
-            return value or None
+            try:
+                return normalize_customer_name(billing_details["name"])
+            except ValueError:
+                return None
         return None
 
     @classmethod
@@ -987,6 +997,19 @@ class StripeVerifier:
             bounded_day_upper_timestamp = (
                 end_timestamp if screenshot_zone is not None else (search_upper_timestamp or end_timestamp)
             )
+            if evidence.relative_today and evidence.received_at is not None:
+                # Keep a relative "Today" lookup bounded around the WhatsApp
+                # receive time. This prevents a high-volume amount from
+                # exhausting a 90-day ledger scan while allowing the sender's
+                # receipt timezone to differ from the Stripe account timezone.
+                received_timestamp = int(evidence.received_at.timestamp())
+                search_lower_timestamp = max(
+                    0,
+                    received_timestamp - RECEIPT_TIMEZONE_WINDOW_SECONDS,
+                )
+                search_upper_timestamp = received_timestamp + 2 * 60 * 60
+                bounded_day_lower_timestamp = search_lower_timestamp
+                bounded_day_upper_timestamp = search_upper_timestamp
         except (StripeVerificationError, TypeError, ValueError) as exc:
             reason_code = exc.reason_code if isinstance(exc, StripeVerificationError) else str(exc)
             result = StripeVerificationResult(processing_id, "ERROR", "ERROR", reason_code, email_hash=email_hash)
@@ -1632,6 +1655,50 @@ class StripeVerifier:
                         candidate_transactions=await candidate_transactions_for(recovery_matches),
                     )
                     self.audit_logger.log_verification(processing_id, result, safe_details="ambiguous_identity_recovery")
+                    return result
+
+            # OCR can read the amount, date, and customer correctly while
+            # misreading one minute digit. When an independent caption email
+            # or exact provider identifier is present, allow a date+name
+            # recovery only if exactly one eligible Stripe charge remains.
+            # This is deliberately not a recency rule and never approves a
+            # tie.
+            if (
+                not matches
+                and evidence.customer_name
+                and (identity_emails or evidence.transaction_id)
+                and evidence.amount_cents is not None
+                and (evidence.payment_date is not None or (evidence.payment_month is not None and evidence.payment_day is not None))
+            ):
+                date_only_evidence = replace(evidence, minutes=None, payment_hour=None)
+                date_name_matches = [
+                    charge for charge in charges
+                    if self._matches(
+                        charge,
+                        date_only_evidence,
+                        customer_ids,
+                        match_zone,
+                        require_identity=bool(evidence.email),
+                        include_time_constraints=True,
+                        match_hour=False,
+                    )
+                    and self._customer_name_matches(charge, evidence)
+                ]
+                date_name_matches = prefer_one_fresh_candidate(date_name_matches)
+                if len(date_name_matches) == 1:
+                    matches = date_name_matches
+                    recovered_identity = True
+                elif len(date_name_matches) > 1:
+                    result = StripeVerificationResult(
+                        processing_id,
+                        "AMBIGUOUS",
+                        "UNCLEAR",
+                        "MULTIPLE_DATE_NAME_MATCHES",
+                        candidate_count=len(date_name_matches),
+                        email_hash=email_hash,
+                        candidate_transactions=await candidate_transactions_for(date_name_matches),
+                    )
+                    self.audit_logger.log_verification(processing_id, result, safe_details="ambiguous_date_name_recovery")
                     return result
 
             if len(matches) == 1:
