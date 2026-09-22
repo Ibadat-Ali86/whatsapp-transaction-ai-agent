@@ -987,8 +987,36 @@ class StripeVerifier:
                         upper_timestamp=search_upper_timestamp,
                     )
                     if query is None:
-                        raise
-                    charges = await self._charges_for_search(client, query)
+                        if not evidence.transaction_id:
+                            raise
+                        charges = (
+                            await self._charges_for_day(
+                                client,
+                                bounded_day_lower_timestamp,
+                                bounded_day_upper_timestamp,
+                            )
+                            if evidence.payment_date is not None
+                            else await self._charges_for_lookback(client)
+                        )
+                    else:
+                        try:
+                            charges = await self._charges_for_search(client, query)
+                        except StripeVerificationError as search_exc:
+                            if search_exc.reason_code != "STRIPE_PAGINATION_LIMIT" or not evidence.transaction_id:
+                                raise
+                            # A popular amount can exhaust the Search cursor
+                            # before the receipt's charge is reached. Switch
+                            # to the bounded list endpoint so the later exact
+                            # identifier pass can inspect real charge objects.
+                            charges = (
+                                await self._charges_for_day(
+                                    client,
+                                    bounded_day_lower_timestamp,
+                                    bounded_day_upper_timestamp,
+                                )
+                                if evidence.payment_date is not None
+                                else await self._charges_for_lookback(client)
+                            )
             elif evidence.amount_cents is not None:
                 # Some Cash App/receipt payments have an email but no Stripe
                 # Customer object. Search by exact amount and a bounded time
@@ -1006,7 +1034,9 @@ class StripeVerifier:
                     # Search can be unavailable on older account API versions.
                     # Preserve a compatible, bounded fallback rather than
                     # turning that capability difference into a false result.
-                    if exc.reason_code != "STRIPE_API_ERROR":
+                    if exc.reason_code != "STRIPE_API_ERROR" and not (
+                        exc.reason_code == "STRIPE_PAGINATION_LIMIT" and evidence.transaction_id
+                    ):
                         raise
                     charges = (
                         await self._charges_for_day(

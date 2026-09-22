@@ -86,6 +86,8 @@ class OCREngine:
                 deterministic_payment_date = fields.payment_date
                 deterministic_payment_month = fields.payment_month
                 deterministic_payment_day = fields.payment_day
+                deterministic_minutes = fields.minutes
+                deterministic_payment_hour = fields.payment_hour
                 for field_name in (
                     'email', 'transaction_id', 'amount_cents', 'minutes',
                     'payment_hour', 'payment_date', 'payment_month',
@@ -105,6 +107,12 @@ class OCREngine:
                     ai_fields.payment_date = None
                     ai_fields.payment_month = deterministic_payment_month
                     ai_fields.payment_day = deterministic_payment_day
+                # A vision model must not invent a receipt clock that is not
+                # visible in the deterministic OCR text. A fabricated time
+                # can turn a valid email/amount match into NO_EXACT_MATCH or
+                # unnecessarily narrow Stripe pagination recovery.
+                ai_fields.minutes = deterministic_minutes
+                ai_fields.payment_hour = deterministic_payment_hour
                 # Description is not present on the current receipt format.
                 # Do not let a vision model invent one and use it as a hard
                 # Stripe filter. If a future receipt explicitly exposes a

@@ -609,6 +609,46 @@ async def test_transaction_id_recovery_checks_bounded_list_when_search_candidate
 
 
 @pytest.mark.asyncio
+async def test_pagination_limit_falls_back_to_bounded_list_for_provider_identifier():
+    def responses(request):
+        if request.url.path == "/v1/customers":
+            return httpx.Response(200, json={"data": [], "has_more": False})
+        if request.url.path == "/v1/charges/search":
+            return httpx.Response(200, json={
+                "data": [charge("ch_search_page")],
+                "has_more": True,
+                "next_page": "search-page-2",
+            })
+        assert request.url.path == "/v1/charges"
+        assert "created[gte]" in request.url.params
+        return httpx.Response(200, json={
+            "data": [charge(
+                "ch_pagination_recovered",
+                customer=None,
+                receipt_email="actual@example.com",
+                payment_method_details={
+                    "type": "cashapp",
+                    "cashapp": {"transaction_id": "C6SZZXTQ0"},
+                },
+            )],
+            "has_more": False,
+        })
+
+    result, _ = await verify_with_responses(
+        responses,
+        max_pages=1,
+        evidence_value=evidence(
+            email=None,
+            transaction_id="C6SZZXTQ0",
+        ),
+    )
+
+    assert result.verdict == "VALID"
+    assert result.reason_code == "TRANSACTION_ID_MATCH"
+    assert result.stripe_charge_id == "ch_pagination_recovered"
+
+
+@pytest.mark.asyncio
 async def test_transaction_id_disambiguates_same_amount_and_time_charges():
     def responses(request):
         assert request.url.path == "/v1/charges/search"
