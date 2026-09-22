@@ -511,9 +511,7 @@ async def test_ocr_email_candidate_recovers_a_mistyped_caption_email():
 @pytest.mark.asyncio
 async def test_transaction_id_recovers_charge_when_caption_email_is_wrong():
     def responses(request):
-        if request.url.path == "/v1/customers":
-            return httpx.Response(200, json={"data": [], "has_more": False})
-        assert request.url.path == "/v1/charges/search"
+        assert request.url.path == "/v1/charges"
         return httpx.Response(200, json={
             "data": [charge(
                 "ch_transaction_id",
@@ -539,9 +537,7 @@ async def test_transaction_id_recovers_charge_when_caption_email_is_wrong():
 @pytest.mark.asyncio
 async def test_cash_app_payment_identifier_selects_one_charge_from_nested_stripe_details():
     def responses(request):
-        if request.url.path == "/v1/customers":
-            return httpx.Response(200, json={"data": [], "has_more": False})
-        assert request.url.path == "/v1/charges/search"
+        assert request.url.path == "/v1/charges"
         return httpx.Response(200, json={
             "data": [charge(
                 "ch_cashapp_identifier",
@@ -567,6 +563,37 @@ async def test_cash_app_payment_identifier_selects_one_charge_from_nested_stripe
     assert result.reason_code == "TRANSACTION_ID_MATCH"
     assert result.stripe_charge_id == "ch_cashapp_identifier"
     assert result.matched_transaction["payment_identifier"] == "R6J4AXTXR"
+
+
+@pytest.mark.asyncio
+async def test_identifier_first_scan_reaches_later_charge_without_search_cursor():
+    def responses(request):
+        assert request.url.path == "/v1/charges"
+        if "starting_after" not in request.url.params:
+            return httpx.Response(200, json={
+                "data": [charge("ch_recent_unrelated")],
+                "has_more": True,
+            })
+        assert request.url.params["starting_after"] == "ch_recent_unrelated"
+        return httpx.Response(200, json={
+            "data": [charge(
+                "ch_exact_later",
+                customer=None,
+                receipt_email="actual@example.com",
+                metadata={"payment_identifier": "LATER123"},
+            )],
+            "has_more": False,
+        })
+
+    result, requests = await verify_with_responses(
+        responses,
+        evidence_value=evidence(email="wrong@example.com", transaction_id="LATER123"),
+    )
+
+    assert result.verdict == "VALID"
+    assert result.reason_code == "TRANSACTION_ID_MATCH"
+    assert result.stripe_charge_id == "ch_exact_later"
+    assert [request.url.path for request in requests] == ["/v1/charges", "/v1/charges"]
 
 
 @pytest.mark.asyncio
@@ -651,7 +678,7 @@ async def test_pagination_limit_falls_back_to_bounded_list_for_provider_identifi
 @pytest.mark.asyncio
 async def test_transaction_id_disambiguates_same_amount_and_time_charges():
     def responses(request):
-        assert request.url.path == "/v1/charges/search"
+        assert request.url.path == "/v1/charges"
         return httpx.Response(200, json={
             "data": [
                 charge("ch_first", customer=None, receipt_email="first@example.com", metadata={"transaction_id": "FIRST123"}),
@@ -1036,8 +1063,10 @@ async def test_follows_charge_pagination():
 @pytest.mark.asyncio
 async def test_page_limit_is_unclear_instead_of_a_false_invalid_error():
     def responses(request):
-        assert request.url.path == "/v1/charges/search"
-        return httpx.Response(200, json={"data": [charge()], "has_more": True, "next_page": "next-page"})
+        if request.url.path == "/v1/charges/search":
+            return httpx.Response(200, json={"data": [charge()], "has_more": True, "next_page": "next-page"})
+        assert request.url.path == "/v1/charges"
+        return httpx.Response(200, json={"data": [charge("ch_recovery_page")], "has_more": True})
 
     result, requests = await verify_with_responses(
         responses,
@@ -1048,12 +1077,13 @@ async def test_page_limit_is_unclear_instead_of_a_false_invalid_error():
             minutes=31,
         ),
         max_pages=1,
+        recovery_max_pages=2,
     )
 
     assert result.status == "SEARCH_LIMITED"
     assert result.verdict == "UNCLEAR"
     assert result.reason_code == "STRIPE_PAGINATION_LIMIT"
-    assert len(requests) == 1
+    assert len(requests) == 3
 
 
 @pytest.mark.asyncio

@@ -121,6 +121,9 @@ STRIPE_SCREENSHOT_TIMEZONE=
 # This avoids rejecting valid receipts whose displayed date crosses a timezone
 # boundary from Stripe's UTC-created timestamp.
 STRIPE_MAX_PAGES=10
+# Used only for evidence-rich recovery after a Search/customer cursor is
+# exhausted. This remains bounded; it is not an unbounded Stripe crawl.
+STRIPE_RECOVERY_MAX_PAGES=100
 STRIPE_LOOKBACK_DAYS=90
 STRIPE_ALLOWED_PAYMENT_METHOD_TYPE=cashapp
 STRIPE_CACHE_TTL_SECONDS=10

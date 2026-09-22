@@ -282,6 +282,7 @@ class StripeVerifier:
         timezone_name: str = "UTC",
         screenshot_timezone: str = "",
         max_pages: int = 10,
+        recovery_max_pages: int = 100,
         lookback_days: int = 90,
         allowed_payment_method_type: str = "cashapp",
         cache_ttl_seconds: float = 10.0,
@@ -303,6 +304,7 @@ class StripeVerifier:
         self.timezone_name = timezone_name
         self.screenshot_timezone = screenshot_timezone.strip()
         self.max_pages = max_pages
+        self.recovery_max_pages = recovery_max_pages
         self.lookback_days = lookback_days
         self.allowed_payment_method_type = allowed_payment_method_type.casefold()
         self.cache_ttl_seconds = cache_ttl_seconds
@@ -337,6 +339,8 @@ class StripeVerifier:
             raise StripeVerificationError(reason_code)
         if self.max_pages < 1 or self.max_pages > 100:
             raise StripeVerificationError("STRIPE_MAX_PAGES_INVALID")
+        if self.recovery_max_pages < 1 or self.recovery_max_pages > 100:
+            raise StripeVerificationError("STRIPE_RECOVERY_MAX_PAGES_INVALID")
         if self.lookback_days < 1 or self.lookback_days > 3650:
             raise StripeVerificationError("STRIPE_LOOKBACK_DAYS_INVALID")
         if self.cache_ttl_seconds < 0 or self.cache_ttl_seconds > 3600:
@@ -485,11 +489,15 @@ class StripeVerifier:
         client: httpx.AsyncClient,
         start_timestamp: int,
         end_timestamp: int,
+        *,
+        max_pages: Optional[int] = None,
+        target_transaction_id: Optional[str] = None,
     ) -> list[dict[str, Any]]:
         charges: list[dict[str, Any]] = []
         starting_after: Optional[str] = None
+        page_limit = self.max_pages if max_pages is None else max_pages
 
-        for _ in range(self.max_pages):
+        for _ in range(page_limit):
             params: dict[str, Any] = {
                 "created[gte]": start_timestamp,
                 "created[lte]": end_timestamp,
@@ -502,10 +510,23 @@ class StripeVerifier:
             page = body.get("data", [])
             if not isinstance(page, list):
                 raise StripeVerificationError("STRIPE_INVALID_RESPONSE", retryable=True)
-            charges.extend(item for item in page if isinstance(item, dict))
+            page_charges = [item for item in page if isinstance(item, dict)]
+            charges.extend(page_charges)
+
+            if target_transaction_id:
+                target_matches = [
+                    item for item in page_charges
+                    if target_transaction_id.casefold() in self._charge_transaction_ids(item)
+                ]
+                if target_matches:
+                    # Provider transaction identifiers are expected to be
+                    # unique. Stop at the first page containing the exact
+                    # identifier so a popular amount cannot force a full
+                    # account scan before the strong evidence is evaluated.
+                    return target_matches
 
             if not body.get("has_more"):
-                return charges
+                return [] if target_transaction_id else charges
             if not page or not isinstance(page[-1].get("id"), str):
                 raise StripeVerificationError("STRIPE_INVALID_PAGINATION", retryable=True)
             starting_after = page[-1]["id"]
@@ -612,6 +633,9 @@ class StripeVerifier:
     async def _charges_for_lookback(
         self,
         client: httpx.AsyncClient,
+        *,
+        max_pages: Optional[int] = None,
+        target_transaction_id: Optional[str] = None,
     ) -> list[dict[str, Any]]:
         """Load a bounded recent charge window for receipt-email matching.
 
@@ -627,6 +651,8 @@ class StripeVerifier:
             client,
             now_timestamp - int(timedelta(days=self.lookback_days).total_seconds()),
             now_timestamp,
+            max_pages=max_pages,
+            target_transaction_id=target_transaction_id,
         )
 
     @staticmethod
@@ -970,11 +996,43 @@ class StripeVerifier:
         owned_client = self.http_client is None
         client = self.http_client or httpx.AsyncClient(timeout=self.timeout_seconds)
         try:
-            customer_ids = await self._customer_ids_for_emails(client, identity_emails) if identity_emails else set()
-            # Prefer the strongest available Stripe-side identity constraint.
-            # Do not apply the OCR date to this first customer-scoped query:
-            # receipt dates can cross the Stripe-account timezone boundary, and
-            # a valid customer charge must not be discarded before matching.
+            customer_ids: set[str] = set()
+            charges: list[dict[str, Any]] = []
+            identifier_scan_hit = False
+
+            # Cash App's provider transaction identifier is stronger than a
+            # caption email or a popular amount. Search it first through the
+            # bounded list endpoint, which returns the nested payment-method
+            # details that Stripe Search may omit. This prevents a broad
+            # amount/customer cursor from exhausting before the exact receipt
+            # identifier is inspected.
+            if evidence.transaction_id:
+                charges = (
+                    await self._charges_for_day(
+                        client,
+                        bounded_day_lower_timestamp,
+                        bounded_day_upper_timestamp,
+                        max_pages=self.recovery_max_pages,
+                        target_transaction_id=evidence.transaction_id,
+                    )
+                    if evidence.payment_date is not None
+                    else await self._charges_for_lookback(
+                        client,
+                        max_pages=self.recovery_max_pages,
+                        target_transaction_id=evidence.transaction_id,
+                    )
+                )
+                identifier_scan_hit = bool(charges)
+
+            # If the exact identifier was not exposed by the selected Stripe
+            # API version, retain the existing evidence-based fallbacks. They
+            # remain bounded and still require one eligible charge.
+            if not charges:
+                customer_ids = await self._customer_ids_for_emails(client, identity_emails) if identity_emails else set()
+                # Prefer the strongest available Stripe-side identity
+                # constraint. Do not apply the OCR date to this first
+                # customer-scoped query: receipt dates can cross the
+                # Stripe-account timezone boundary.
             if customer_ids:
                 try:
                     charges = await self._charges_for_customers(client, customer_ids)
@@ -987,37 +1045,42 @@ class StripeVerifier:
                         upper_timestamp=search_upper_timestamp,
                     )
                     if query is None:
-                        if not evidence.transaction_id:
-                            raise
                         charges = (
                             await self._charges_for_day(
                                 client,
                                 bounded_day_lower_timestamp,
                                 bounded_day_upper_timestamp,
+                                max_pages=self.recovery_max_pages,
                             )
                             if evidence.payment_date is not None
-                            else await self._charges_for_lookback(client)
+                            else await self._charges_for_lookback(
+                                client,
+                                max_pages=self.recovery_max_pages,
+                            )
                         )
                     else:
                         try:
                             charges = await self._charges_for_search(client, query)
                         except StripeVerificationError as search_exc:
-                            if search_exc.reason_code != "STRIPE_PAGINATION_LIMIT" or not evidence.transaction_id:
+                            if search_exc.reason_code not in {"STRIPE_PAGINATION_LIMIT", "STRIPE_API_ERROR"}:
                                 raise
                             # A popular amount can exhaust the Search cursor
                             # before the receipt's charge is reached. Switch
-                            # to the bounded list endpoint so the later exact
-                            # identifier pass can inspect real charge objects.
+                            # to the higher, bounded list recovery budget.
                             charges = (
                                 await self._charges_for_day(
                                     client,
                                     bounded_day_lower_timestamp,
                                     bounded_day_upper_timestamp,
+                                    max_pages=self.recovery_max_pages,
                                 )
                                 if evidence.payment_date is not None
-                                else await self._charges_for_lookback(client)
+                                else await self._charges_for_lookback(
+                                    client,
+                                    max_pages=self.recovery_max_pages,
+                                )
                             )
-            elif evidence.amount_cents is not None:
+            elif not charges and evidence.amount_cents is not None:
                 # Some Cash App/receipt payments have an email but no Stripe
                 # Customer object. Search by exact amount and a bounded time
                 # window instead of walking the account's entire charge list.
@@ -1032,20 +1095,23 @@ class StripeVerifier:
                     charges = await self._charges_for_search(client, query)
                 except StripeVerificationError as exc:
                     # Search can be unavailable on older account API versions.
-                    # Preserve a compatible, bounded fallback rather than
-                    # turning that capability difference into a false result.
-                    if exc.reason_code != "STRIPE_API_ERROR" and not (
-                        exc.reason_code == "STRIPE_PAGINATION_LIMIT" and evidence.transaction_id
-                    ):
+                    # Preserve a compatible, higher-but-bounded fallback
+                    # rather than turning a searchable receipt into review
+                    # merely because the popular amount exhausted Search.
+                    if exc.reason_code not in {"STRIPE_API_ERROR", "STRIPE_PAGINATION_LIMIT"}:
                         raise
                     charges = (
                         await self._charges_for_day(
                             client,
                             bounded_day_lower_timestamp,
                             bounded_day_upper_timestamp,
+                            max_pages=self.recovery_max_pages,
                         )
                         if evidence.payment_date is not None
-                        else await self._charges_for_lookback(client)
+                        else await self._charges_for_lookback(
+                            client,
+                            max_pages=self.recovery_max_pages,
+                        )
                     )
                 if not charges:
                     # Stripe Search is eventually consistent. A just-created
@@ -1059,16 +1125,25 @@ class StripeVerifier:
                             client,
                             bounded_day_lower_timestamp,
                             bounded_day_upper_timestamp,
+                            max_pages=self.recovery_max_pages,
                         )
                         if evidence.payment_date is not None
-                        else await self._charges_for_lookback(client)
+                        else await self._charges_for_lookback(
+                            client,
+                            max_pages=self.recovery_max_pages,
+                        )
                     )
-            elif identity_emails:
-                charges = await self._charges_for_lookback(client)
-            elif evidence.payment_date is not None:
-                charges = await self._charges_for_day(client, start_timestamp, end_timestamp)
-            else:
-                charges = await self._charges_for_lookback(client)
+            elif not charges and identity_emails:
+                charges = await self._charges_for_lookback(client, max_pages=self.recovery_max_pages)
+            elif not charges and evidence.payment_date is not None:
+                charges = await self._charges_for_day(
+                    client,
+                    start_timestamp,
+                    end_timestamp,
+                    max_pages=self.recovery_max_pages,
+                )
+            elif not charges:
+                charges = await self._charges_for_lookback(client, max_pages=self.recovery_max_pages)
             match_zone = screenshot_zone or zone
 
             def matches_for(
@@ -1236,6 +1311,7 @@ class StripeVerifier:
             if (
                 not matches
                 and not customer_ids
+                and not identifier_scan_hit
                 and evidence.amount_cents is not None
                 and evidence.payment_date is not None
                 and search_upper_timestamp is not None
@@ -1255,6 +1331,7 @@ class StripeVerifier:
                             client,
                             bounded_day_lower_timestamp,
                             bounded_day_upper_timestamp,
+                            max_pages=self.recovery_max_pages,
                         )
                     if day_charges:
                         charges = day_charges
@@ -1310,9 +1387,17 @@ class StripeVerifier:
             # match into a second candidate set.
             if not matches and customer_ids and not has_receipt_date:
                 charges = (
-                    await self._charges_for_day(client, start_timestamp, end_timestamp)
+                    await self._charges_for_day(
+                        client,
+                        start_timestamp,
+                        end_timestamp,
+                        max_pages=self.recovery_max_pages,
+                    )
                     if evidence.payment_date is not None
-                    else await self._charges_for_lookback(client)
+                    else await self._charges_for_lookback(
+                        client,
+                        max_pages=self.recovery_max_pages,
+                    )
                 )
                 matches = matches_for(
                     charges,
@@ -1338,6 +1423,7 @@ class StripeVerifier:
             # retain all local evidence constraints before approving anything.
             if (
                 not matches
+                and not identifier_scan_hit
                 and evidence.amount_cents is not None
                 and (evidence.payment_date is not None or evidence.minutes is not None or evidence.transaction_id)
             ):
@@ -1354,8 +1440,21 @@ class StripeVerifier:
                         broad_charges = await self._charges_for_search(client, broad_query)
                     except StripeVerificationError as exc:
                         if exc.reason_code == "STRIPE_API_ERROR":
-                            broad_charges = await self._charges_for_lookback(client)
-                        elif exc.reason_code != "STRIPE_PAGINATION_LIMIT":
+                            broad_charges = await self._charges_for_lookback(
+                                client,
+                                max_pages=self.recovery_max_pages,
+                            )
+                        elif exc.reason_code == "STRIPE_PAGINATION_LIMIT":
+                            broad_charges = await self._charges_for_day(
+                                client,
+                                bounded_day_lower_timestamp,
+                                bounded_day_upper_timestamp,
+                                max_pages=self.recovery_max_pages,
+                            ) if evidence.payment_date is not None else await self._charges_for_lookback(
+                                client,
+                                max_pages=self.recovery_max_pages,
+                            )
+                        else:
                             raise
                 if broad_charges:
                     merged_charges = {charge.get("id"): charge for charge in charges if charge.get("id")}
@@ -1427,9 +1526,17 @@ class StripeVerifier:
             # result hide a valid exact transaction identifier.
             if not transaction_matches and evidence.transaction_id and customer_ids:
                 charges = (
-                    await self._charges_for_day(client, start_timestamp, end_timestamp)
+                    await self._charges_for_day(
+                        client,
+                        start_timestamp,
+                        end_timestamp,
+                        max_pages=self.recovery_max_pages,
+                    )
                     if evidence.payment_date is not None
-                    else await self._charges_for_lookback(client)
+                    else await self._charges_for_lookback(
+                        client,
+                        max_pages=self.recovery_max_pages,
+                    )
                 )
                 transaction_matches = transaction_matches_for(
                     charges,
@@ -1444,7 +1551,11 @@ class StripeVerifier:
                 # The local matcher still requires amount, succeeded status,
                 # currency, and the configured payment method; the identifier
                 # never authorizes an unrelated charge.
-                recovery_charges = await self._charges_for_lookback(client)
+                recovery_charges = await self._charges_for_lookback(
+                    client,
+                    max_pages=self.recovery_max_pages,
+                    target_transaction_id=evidence.transaction_id,
+                )
                 merged_charges = {
                     charge.get("id"): charge
                     for charge in charges

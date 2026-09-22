@@ -287,6 +287,7 @@ async def verify_stripe(
         timezone_name=settings.STRIPE_TIMEZONE,
         screenshot_timezone=settings.STRIPE_SCREENSHOT_TIMEZONE,
         max_pages=settings.STRIPE_MAX_PAGES,
+        recovery_max_pages=int(getattr(settings, "STRIPE_RECOVERY_MAX_PAGES", 100)),
         lookback_days=settings.STRIPE_LOOKBACK_DAYS,
         allowed_payment_method_type=settings.STRIPE_ALLOWED_PAYMENT_METHOD_TYPE,
         cache_ttl_seconds=float(getattr(settings, "STRIPE_CACHE_TTL_SECONDS", 10.0)),
