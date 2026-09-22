@@ -112,7 +112,13 @@
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ processing_id: $json.processing_id, image_base64: $json.image.base64, mime_type: $json.image.mime_type, message_id: $json.message_id, group_id: $json.group_id, sender_jid: $json.sender_jid, caption_email: $json.caption_email }) }}",
         "options": {
-          "timeout": 60000
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 90000
         }
       },
       "id": "f0c8b9d0-5bdf-4e74-b19f-4f75f0b0b103",
@@ -120,6 +126,16 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [1200, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const unwrap = value => {\n  if (typeof value === 'string') { try { return JSON.parse(value); } catch (_error) { return value; } }\n  if (value && typeof value === 'object' && !Array.isArray(value) && !Object.prototype.hasOwnProperty.call(value, 'fields') && !Object.prototype.hasOwnProperty.call(value, 'provider') && !Object.prototype.hasOwnProperty.call(value, 'raw_text') && !Object.prototype.hasOwnProperty.call(value, 'verdict')) {\n    for (const key of ['body', 'data', 'json']) {\n      if (Object.prototype.hasOwnProperty.call(value, key)) return unwrap(value[key]);\n    }\n  }\n  return value;\n};\nconst candidate = unwrap($json);\nconst base = candidate && typeof candidate === 'object' && !Array.isArray(candidate) ? candidate : { error: 'OCR_RESPONSE_INVALID', reason_code: 'OCR_RESPONSE_INVALID' };\nconst fields = base.fields && typeof base.fields === 'object' && !Array.isArray(base.fields) ? base.fields : {};\nreturn [{ json: { ...base, fields } }];"
+      },
+      "id": "f0c8b9d0-5bdf-4e74-b19f-4f75f0b108",
+      "name": "Normalize OCR Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1440, 300]
     },
     {
       "parameters": {
@@ -172,7 +188,13 @@
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify($json.stripe_request) }}",
         "options": {
-          "timeout": 30000
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 120000
         }
       },
       "id": "f0c8b9d0-5bdf-4e74-b19f-4f75f0b0b106",
@@ -281,6 +303,9 @@
       ]
     },
     "OCR Service": {
+      "main": [[{"node": "Normalize OCR Response", "type": "main", "index": 0}]]
+    },
+    "Normalize OCR Response": {
       "main": [[{"node": "Prepare Stripe Evidence", "type": "main", "index": 0}]]
     },
     "Prepare Stripe Evidence": {

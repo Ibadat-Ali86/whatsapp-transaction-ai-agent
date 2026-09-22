@@ -56,6 +56,11 @@ const handler = createMessageHandler(sock, {
   BOT_REACTIONS_ENABLED: true,
   REQUIRE_EMAIL_CAPTION: true,
   N8N_ENABLED: true,
+  N8N_BASE_URL: process.env.N8N_BASE_URL,
+  N8N_WEBHOOK_PATH: process.env.N8N_WEBHOOK_PATH || '/webhook/whatsapp-screenshot',
+  N8N_WEBHOOK_TOKEN: process.env.N8N_WEBHOOK_TOKEN,
+  N8N_TIMEOUT_MS: 150000,
+  N8N_RETRY_ATTEMPTS: 0,
   STRIPE_VERIFICATION_ENABLED: false,
 }, logger, {
   downloadImage: async () => ({
@@ -74,7 +79,7 @@ handler({ messages: [message] })
     // it validates transport/OCR wiring only. A skipped Stripe gate is an
     // unconfirmed result and therefore uses the production cross reaction
     // plus the handler's professional justification reply.
-    assert.deepEqual(response?.react?.text, '❌');
+    assert.deepEqual(response?.react?.text, '⚠️');
     assert.equal(response?.react?.key?.id, message.key.id);
     console.log(JSON.stringify({
       ok: true,

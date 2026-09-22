@@ -26,6 +26,8 @@ such as an amount; multiple different addresses remain ambiguous.
 N8N_BASE_URL=http://localhost:5678
 N8N_WEBHOOK_PATH=/webhook/whatsapp-screenshot
 N8N_HEALTH_TIMEOUT_MS=5000
+N8N_TIMEOUT_MS=150000
+N8N_RETRY_ATTEMPTS=2
 
 LOG_LEVEL=INFO
 
@@ -35,17 +37,20 @@ the Stripe secret.
 
 `BOT_REACTIONS_ENABLED=true` enables reaction-first results. Clear valid and
 failed/unclear results react to the original screenshot. `✅` is reserved for
-a unique eligible Stripe match; every non-duplicate non-valid result uses
-`❌` and, when bot replies are enabled, includes a concise explanation.
+a unique eligible Stripe match; confirmed non-matches use `❌`, while
+ambiguous or technical outcomes use `⚠️` and, when bot replies are enabled,
+include a concise explanation.
 `BOT_PROCESSING_REACTIONS_ENABLED=true` adds an immediate `⏳` acknowledgment
 while OCR/Stripe verification is running; it is never a payment verdict.
 Captionless valid results and valid results whose caption identity was
 corrected by Stripe also send a detailed reply containing the canonical
 Stripe-recovered email so the group can see which customer was matched.
-When the caption is absent, the reply explicitly says so and shows a masked
-Stripe email and masked identifiers, together with the verified amount, time,
-status, payment method, customer name when present, and description. It never
-uses an OCR guess as a verified identity or publishes raw Stripe objects.
+When the caption is absent, the reply explicitly says so and shows the full
+Stripe email together with the verified amount, time, status, payment method,
+customer name when present, and description. It never uses an OCR guess as a
+verified identity or publishes raw Stripe objects. Stripe charge/customer IDs
+remain masked in public group messages; full candidate proof belongs in the
+configured private admin channel.
 Duplicate results remain text replies so the bot can explain the original
 processing record. Ambiguous Stripe results remain review-only, but now include
 the sanitized eligible candidate records in newest-first order so the client

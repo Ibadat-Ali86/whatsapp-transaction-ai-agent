@@ -991,6 +991,14 @@ class StripeVerifier:
                 # of scanning a 90-day amount ledger.
                 search_lower_timestamp = max(0, start_timestamp - RECEIPT_TIMEZONE_WINDOW_SECONDS)
                 search_upper_timestamp = end_timestamp + RECEIPT_TIMEZONE_WINDOW_SECONDS
+            elif evidence.payment_date is not None:
+                # A date-only Cash App receipt may be displayed in the
+                # sender's local timezone while Stripe returns `created` in
+                # the account/API timezone. Search the bounded +/-26-hour
+                # boundary so a valid charge is not discarded before the
+                # local uniqueness checks run below.
+                search_lower_timestamp = max(0, start_timestamp - RECEIPT_TIMEZONE_WINDOW_SECONDS)
+                search_upper_timestamp = end_timestamp + RECEIPT_TIMEZONE_WINDOW_SECONDS
             bounded_day_lower_timestamp = (
                 start_timestamp if screenshot_zone is not None else search_lower_timestamp
             )
@@ -1304,6 +1312,8 @@ class StripeVerifier:
                 return transactions
 
             timezone_boundary_match = False
+            date_boundary_match = False
+            stripe_canonical_recovery = False
 
             matches = matches_for(
                 charges,
@@ -1621,6 +1631,93 @@ class StripeVerifier:
                 matches = transaction_matches
                 transaction_id_match = True
 
+            def date_boundary_matches_for(
+                candidate_charges: list[dict[str, Any]],
+            ) -> list[dict[str, Any]]:
+                """Recover a date-boundary receipt without trusting recency.
+
+                Date-only screenshots are common for Cash App. When the
+                displayed calendar day differs from Stripe's account day by a
+                timezone boundary, keep the candidate only if the charge is
+                eligible and the receipt still supplies independent identity
+                (provider ID, email, or exact name) or an exact receipt minute.
+                The caller approves only one surviving candidate.
+                """
+                if evidence.payment_date is None or evidence.amount_cents is None:
+                    return []
+                if not (
+                    identity_emails
+                    or evidence.transaction_id
+                    or evidence.customer_name
+                    or evidence.minutes is not None
+                ):
+                    return []
+
+                boundary_matches: list[dict[str, Any]] = []
+                for charge in candidate_charges:
+                    if not self._matches(
+                        charge,
+                        evidence,
+                        customer_ids,
+                        match_zone,
+                        require_identity=False,
+                        include_time_constraints=False,
+                    ):
+                        continue
+                    local_created = _charge_local_datetime(charge, match_zone)
+                    if local_created is None or abs((local_created.date() - evidence.payment_date).days) != 1:
+                        continue
+                    if evidence.minutes is not None and local_created.minute != evidence.minutes:
+                        continue
+                    if (
+                        bool(self.screenshot_timezone)
+                        and evidence.payment_hour is not None
+                        and local_created.hour != evidence.payment_hour
+                    ):
+                        continue
+
+                    identity_match = False
+                    charge_email = self._charge_email(charge)
+                    customer_id = charge.get("customer")
+                    if identity_emails and (charge_email in identity_emails or customer_id in customer_ids):
+                        identity_match = True
+                    if evidence.transaction_id and self._transaction_id_matches(charge, evidence):
+                        identity_match = True
+                    if evidence.customer_name and self._customer_name_matches(charge, evidence):
+                        identity_match = True
+                    if not identity_match and (
+                        identity_emails
+                        or evidence.transaction_id
+                        or evidence.customer_name
+                    ):
+                        continue
+                    if not identity_match and evidence.minutes is None:
+                        continue
+                    boundary_matches.append(charge)
+                return boundary_matches
+
+            # Apply the date-boundary recovery after the provider-identifier
+            # path. This lets an exact Cash App identifier win first, while
+            # still recovering valid date-only receipts when Stripe's account
+            # timezone differs from the screenshot's display timezone.
+            if not matches and evidence.payment_date is not None:
+                boundary_matches = prefer_one_fresh_candidate(date_boundary_matches_for(charges))
+                if len(boundary_matches) == 1:
+                    matches = boundary_matches
+                    date_boundary_match = True
+                elif len(boundary_matches) > 1:
+                    result = StripeVerificationResult(
+                        processing_id,
+                        "AMBIGUOUS",
+                        "UNCLEAR",
+                        "MULTIPLE_DATE_BOUNDARY_MATCHES",
+                        candidate_count=len(boundary_matches),
+                        email_hash=email_hash,
+                        candidate_transactions=await candidate_transactions_for(boundary_matches),
+                    )
+                    self.audit_logger.log_verification(processing_id, result, safe_details="ambiguous_date_boundary_recovery")
+                    return result
+
             # A syntactically valid caption can still be stale or mistyped.
             # If it produced no match, recover only from at least two
             # independent OCR constraints and only when exactly one eligible
@@ -1658,15 +1755,17 @@ class StripeVerifier:
                     return result
 
             # OCR can read the amount, date, and customer correctly while
-            # misreading one minute digit. When an independent caption email
-            # or exact provider identifier is present, allow a date+name
-            # recovery only if exactly one eligible Stripe charge remains.
+            # misreading one minute digit. A captionless receipt can also
+            # provide an exact customer name from the payment screen even
+            # though the WhatsApp caption has no email. Allow date+name
+            # recovery when the amount, eligibility, and date evidence are
+            # present, but only if exactly one eligible Stripe charge remains.
             # This is deliberately not a recency rule and never approves a
             # tie.
+            captionless_name_recovery = False
             if (
                 not matches
                 and evidence.customer_name
-                and (identity_emails or evidence.transaction_id)
                 and evidence.amount_cents is not None
                 and (evidence.payment_date is not None or (evidence.payment_month is not None and evidence.payment_day is not None))
             ):
@@ -1688,6 +1787,7 @@ class StripeVerifier:
                 if len(date_name_matches) == 1:
                     matches = date_name_matches
                     recovered_identity = True
+                    captionless_name_recovery = not identity_emails and not evidence.transaction_id
                 elif len(date_name_matches) > 1:
                     result = StripeVerificationResult(
                         processing_id,
@@ -1699,6 +1799,92 @@ class StripeVerifier:
                         candidate_transactions=await candidate_transactions_for(date_name_matches),
                     )
                     self.audit_logger.log_verification(processing_id, result, safe_details="ambiguous_date_name_recovery")
+                    return result
+
+            # Stripe is authoritative for payment eligibility. OCR date,
+            # minute, and description fields are correlation hints and may be
+            # wrong or displayed in a different timezone. If strict matching
+            # failed, perform one bounded canonical recovery pass that keeps
+            # Stripe amount/status/currency/method hard-gated, requires a
+            # strong identity (provider ID, email/customer, or exact name),
+            # and accepts only a uniquely time-related charge. This prevents
+            # one OCR field from hiding a real Stripe payment without ever
+            # approving an arbitrary same-amount record.
+            if not matches and evidence.amount_cents is not None:
+                canonical_evidence = replace(
+                    evidence,
+                    email=None,
+                    email_candidates=(),
+                    transaction_id=None,
+                    description=None,
+                    customer_name=None,
+                    payment_date=None,
+                    payment_hour=None,
+                    minutes=None,
+                    payment_month=None,
+                    payment_day=None,
+                )
+
+                def canonical_identity_matches(charge: dict[str, Any]) -> bool:
+                    if evidence.transaction_id and self._transaction_id_matches(charge, evidence):
+                        return True
+                    charge_email = self._charge_email(charge)
+                    customer_id = charge.get("customer")
+                    if identity_emails and (charge_email in identity_emails or customer_id in customer_ids):
+                        return True
+                    return self._customer_name_matches(charge, evidence)
+
+                def canonical_time_matches(charge: dict[str, Any]) -> bool:
+                    local_created = _charge_local_datetime(charge, match_zone)
+                    if local_created is None:
+                        return False
+                    if evidence.payment_date is not None:
+                        if evidence.payment_hour is not None and evidence.minutes is not None:
+                            expected = datetime.combine(
+                                evidence.payment_date,
+                                time(evidence.payment_hour, evidence.minutes),
+                                tzinfo=match_zone,
+                            )
+                            return abs((local_created - expected).total_seconds()) <= RECEIPT_TIMEZONE_WINDOW_SECONDS
+                        return abs((local_created.date() - evidence.payment_date).days) <= 1
+                    if evidence.payment_month is not None and evidence.payment_day is not None:
+                        return (
+                            local_created.month == evidence.payment_month
+                            and local_created.day == evidence.payment_day
+                        )
+                    if evidence.relative_today and evidence.received_at is not None:
+                        return abs(local_created.timestamp() - evidence.received_at.timestamp()) <= RECEIPT_TIMEZONE_WINDOW_SECONDS
+                    return False
+
+                canonical_matches = [
+                    charge for charge in charges
+                    if self._matches(
+                        charge,
+                        canonical_evidence,
+                        set(),
+                        match_zone,
+                        require_identity=False,
+                        include_time_constraints=False,
+                    )
+                    and canonical_identity_matches(charge)
+                    and canonical_time_matches(charge)
+                ]
+                canonical_matches = prefer_one_fresh_candidate(canonical_matches)
+                if len(canonical_matches) == 1:
+                    matches = canonical_matches
+                    recovered_identity = True
+                    stripe_canonical_recovery = True
+                elif len(canonical_matches) > 1:
+                    result = StripeVerificationResult(
+                        processing_id,
+                        "AMBIGUOUS",
+                        "UNCLEAR",
+                        "MULTIPLE_STRIPE_CANONICAL_MATCHES",
+                        candidate_count=len(canonical_matches),
+                        email_hash=email_hash,
+                        candidate_transactions=await candidate_transactions_for(canonical_matches),
+                    )
+                    self.audit_logger.log_verification(processing_id, result, safe_details="ambiguous_canonical_recovery")
                     return result
 
             if len(matches) == 1:
@@ -1719,7 +1905,7 @@ class StripeVerifier:
                     processing_id,
                     "MATCHED",
                     "VALID",
-                    "TRANSACTION_ID_MATCH" if transaction_id_match else "TIMEZONE_BOUNDARY_SINGLE_MATCH" if timezone_boundary_match else "IDENTITY_RECOVERED_FROM_STRIPE" if recovered_identity else "EXACT_SINGLE_MATCH" if has_ocr_constraints else "EMAIL_SINGLE_MATCH",
+                    "TRANSACTION_ID_MATCH" if transaction_id_match else "DATE_BOUNDARY_SINGLE_MATCH" if date_boundary_match else "TIMEZONE_BOUNDARY_SINGLE_MATCH" if timezone_boundary_match else "CAPTIONLESS_DATE_NAME_SINGLE_MATCH" if captionless_name_recovery else "STRIPE_CANONICAL_RECOVERY_SINGLE_MATCH" if stripe_canonical_recovery else "IDENTITY_RECOVERED_FROM_STRIPE" if recovered_identity else "EXACT_SINGLE_MATCH" if has_ocr_constraints else "EMAIL_SINGLE_MATCH",
                     stripe_charge_id=matches[0].get("id"),
                     candidate_count=1,
                     email_hash=email_hash,

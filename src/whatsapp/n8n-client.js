@@ -35,8 +35,8 @@ function isOcrResult(value) {
   return Boolean(value)
     && typeof value === 'object'
     && !Array.isArray(value)
-    && value.fields
-    && typeof value.fields === 'object'
+    && Object.prototype.hasOwnProperty.call(value, 'fields')
+    && (value.fields === null || (typeof value.fields === 'object' && !Array.isArray(value.fields)))
     && (typeof value.provider === 'string' || typeof value.raw_text === 'string' || typeof value.confidence === 'number');
 }
 
@@ -64,12 +64,14 @@ function normalizeN8nResponse(value, depth = 0) {
   }
 
   if (typeof value !== 'object') return null;
-  if (hasVerificationDecision(value) || isOcrResult(value)) return value;
+  if (hasVerificationDecision(value)) return value;
 
   if (Object.prototype.hasOwnProperty.call(value, 'verification')) {
     const verification = normalizeN8nResponse(value.verification, depth + 1);
     if (hasVerificationDecision(verification)) return { ...value, verification };
   }
+
+  if (isOcrResult(value)) return value;
 
   for (const key of ['json', 'body', 'data', 'ocr_result', 'verification_result']) {
     if (Object.prototype.hasOwnProperty.call(value, key)) {
@@ -159,6 +161,17 @@ async function processImageViaN8n(payload, options = {}) {
           { status: response?.status ?? null, code },
         );
       }
+      (logger.info || (() => {}))({
+        status: response?.status ?? null,
+        response_kind: Array.isArray(normalized) ? 'array' : typeof normalized,
+        ocr_provider: typeof normalized.provider === 'string' ? normalized.provider : null,
+        ocr_fields_present: Object.prototype.hasOwnProperty.call(normalized, 'fields'),
+        ocr_field_keys: normalized.fields && typeof normalized.fields === 'object'
+          ? Object.keys(normalized.fields).filter(key => normalized.fields[key] != null).slice(0, 16)
+          : [],
+        verification_present: Boolean(normalized.verification || hasVerificationDecision(normalized)),
+        verification_reason: normalized.verification?.reason_code || normalized.reason_code || null,
+      }, 'n8n webhook response normalized');
       return normalized;
     } catch (error) {
       const retryable = error instanceof N8nServiceError

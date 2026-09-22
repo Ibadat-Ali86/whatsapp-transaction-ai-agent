@@ -125,12 +125,19 @@ One eligible charge matched the amount, receipt minute, payment status/method,
 and strong identity evidence within the bounded receipt/account timezone
 window. This is not a recency-only or amount-only approval.
 
+DATE_BOUNDARY_SINGLE_MATCH
+One eligible charge matched the amount, payment status/method, and either exact
+provider identity/email/name or an exact receipt minute across a one-day
+timezone boundary. The verifier approves only one surviving charge; ties stay
+unclear.
+
 matched_transaction
 Canonical amount, local date/time, customer name, description, status, and
 payment method returned only for one eligible Stripe match.
-Captionless public replies label the caption as absent and mask the Stripe
-email, customer ID, and charge ID; the underlying verification result remains
-the source of truth.
+Captionless public replies label the caption as absent and show the complete
+canonical Stripe email. Stripe customer IDs and charge IDs remain masked in
+public messages; the underlying verification result remains the source of
+truth.
 
 candidate_transactions
 Sanitized Stripe records returned only for an ambiguous review result. They

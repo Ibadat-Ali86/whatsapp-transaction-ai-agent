@@ -48,8 +48,19 @@ test('normalizes supported n8n webhook response envelopes', () => {
   assert.deepEqual(normalizeN8nResponse([{ json: result }]), result);
   assert.deepEqual(normalizeN8nResponse({ body: { data: JSON.stringify(result) } }), result);
   assert.deepEqual(
+    normalizeN8nResponse({
+      statusCode: 503,
+      body: { status: 'ERROR', verdict: 'ERROR', reason_code: 'STRIPE_NETWORK_ERROR' },
+    }),
+    { status: 'ERROR', verdict: 'ERROR', reason_code: 'STRIPE_NETWORK_ERROR' },
+  );
+  assert.deepEqual(
     normalizeN8nResponse({ provider: 'tesseract', fields: null, verification: { body: verification } }),
     { provider: 'tesseract', fields: null, verification },
+  );
+  assert.deepEqual(
+    normalizeN8nResponse({ provider: 'unknown', raw_text: '', fields: null, error: 'Processing failed' }),
+    { provider: 'unknown', raw_text: '', fields: null, error: 'Processing failed' },
   );
   assert.equal(normalizeN8nResponse([{ json: { unrelated: true } }]), null);
   assert.equal(normalizeN8nResponse([result, result]), null);

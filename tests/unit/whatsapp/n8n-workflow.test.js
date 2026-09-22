@@ -39,11 +39,18 @@ test('n8n v2 workflow contains a gated Stripe branch without secret values', () 
   assert.ok(nodeNames.includes('Duplicate Message?'));
   assert.ok(nodeNames.includes('Respond Duplicate'));
   assert.ok(nodeNames.includes('Respond OCR Result'));
+  assert.ok(nodeNames.includes('Normalize OCR Response'));
   assert.ok(nodeNames.includes('Valid Event?'));
   assert.ok(nodeNames.includes('Respond Invalid Event'));
   const stripeNode = workflow.nodes.find(node => node.name === 'Stripe Test Verifier');
+  const ocrNode = workflow.nodes.find(node => node.name === 'OCR Service');
+  assert.equal(ocrNode.parameters.options.response.response.neverError, true);
+  assert.equal(ocrNode.parameters.options.response.response.responseFormat, 'json');
   assert.equal(stripeNode.credentials.httpHeaderAuth.name, 'OCR service Stripe verifier auth');
   assert.equal(stripeNode.credentials.httpHeaderAuth.id, 'CONFIGURE_STRIPE_IN_N8N');
+  assert.equal(stripeNode.parameters.options.timeout, 120000);
+  assert.equal(stripeNode.parameters.options.response.response.neverError, true);
+  assert.equal(stripeNode.parameters.options.response.response.responseFormat, 'json');
   const webhookNode = workflow.nodes.find(node => node.name === 'WhatsApp Webhook');
   assert.equal(webhookNode.type, 'n8n-nodes-base.webhook');
   assert.equal(webhookNode.typeVersion, 2);
@@ -81,6 +88,11 @@ test('Docker production workflow targets the private OCR service name', () => {
   assert.match(serialized, /http:\/\/ocr:8000\/api\/v1\/verification\/stripe/);
   assert.doesNotMatch(serialized, /http:\/\/localhost:8000/);
   assert.doesNotMatch(serialized, /sk_(live|test)_[A-Za-z0-9]+/);
+  const stripeNode = nodeByName(workflow, 'Stripe Test Verifier');
+  const ocrNode = nodeByName(workflow, 'OCR Service');
+  assert.equal(ocrNode.parameters.options.response.response.neverError, true);
+  assert.equal(stripeNode.parameters.options.response.response.neverError, true);
+  assert.equal(stripeNode.parameters.options.response.response.responseFormat, 'json');
 });
 
 test('n8n v2 code nodes validate optional captions and prepare recoverable Stripe evidence', () => {
@@ -88,6 +100,7 @@ test('n8n v2 code nodes validate optional captions and prepare recoverable Strip
   const validate = nodeByName(workflow, 'Validate Event');
   const idempotency = nodeByName(workflow, 'Idempotency Guard');
   const prepare = nodeByName(workflow, 'Prepare Stripe Evidence');
+  const normalize = nodeByName(workflow, 'Normalize OCR Response');
   const baseEvent = {
     processing_id: 'contract-001',
     source: 'whatsapp',
@@ -161,6 +174,15 @@ test('n8n v2 code nodes validate optional captions and prepare recoverable Strip
   assert.equal(wrappedOcr.ocr_result.fields.amount_cents, 1000);
   assert.equal(wrappedOcr.stripe_request.amount_cents, 1000);
   assert.equal(wrappedOcr.stripe_request.minutes, 53);
+
+  const normalizedError = executeCodeNode(normalize, {
+    body: { error: 'Processing failed', verdict: 'UNCLEAR', reason_code: 'TESSERACT_ERROR' },
+  })[0].json;
+  assert.equal(Object.keys(normalizedError.fields).length, 0);
+  const recoverableError = executeCodeNode(prepare, normalizedError, { references: { 'Validate Event': validated } })[0].json;
+  assert.equal(recoverableError.ready_for_stripe, true);
+  assert.equal(recoverableError.stripe_request.email, 'customer@example.com');
+  assert.equal(recoverableError.stripe_request.amount_cents, null);
 
   const formatVerified = nodeByName(workflow, 'Format Verified Result');
   const verified = executeCodeNode(formatVerified, {

@@ -16,6 +16,7 @@ const { isAllowedGroupJid, hashGroupJid } = require('./group-access');
 const { createDuplicateStore } = require('./duplicate-store');
 const { createProcessingQueue, QueueFullError } = require('./processing-queue');
 const { getImageMessage, getImageMimeType } = require('./message-media');
+const { reconcileCandidateBatch } = require('../verification/batch-reconciler');
 
 /**
  * Orchestrates WhatsApp intake and delegates expensive work to a durable,
@@ -36,6 +37,9 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
   });
   const groupNameCache = new Map();
   const pendingCaptionEmails = new Map();
+  const pendingBatchReconciliations = new Map();
+  const batchFlushTimers = new Map();
+  const batchFlushLocks = new Map();
   const MAX_PENDING_CAPTION_KEYS = 4096;
   const captionAssociationWindowMs = Number.isInteger(config.CAPTION_ASSOCIATION_WINDOW_MS)
     ? config.CAPTION_ASSOCIATION_WINDOW_MS
@@ -157,6 +161,8 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
     'MULTIPLE_EXACT_MATCHES',
     'MULTIPLE_IDENTITY_RECOVERY_MATCHES',
     'MULTIPLE_TRANSACTION_ID_MATCHES',
+    'MULTIPLE_DATE_NAME_MATCHES',
+    'MULTIPLE_STRIPE_CANONICAL_MATCHES',
   ]);
   const notifyPrivateStripeReview = async (result, processingId) => {
     const adminJids = Array.isArray(config.PAYMENT_REVIEW_ADMIN_JIDS)
@@ -194,6 +200,229 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
       return null;
     }
   });
+
+  const finalizeResult = async ({ job, message, groupId, finalResult, duplicateRecord = null }) => {
+    const currentSock = getSock();
+    if (!currentSock) throw new Error('WhatsApp socket is unavailable');
+    if (finalResult?.verification?.verdict === 'DUPLICATE') {
+      if (config.BOT_REPLY_ENABLED) {
+        try {
+          await currentSock.sendMessage(groupId, {
+            text: formatDuplicateReply(finalResult, job.processing_id, {
+              groupScope: finalResult.verification.duplicate_scope,
+              originalGroupName: finalResult.verification.duplicate_group_name,
+            }),
+          }, { quoted: message });
+        } catch (notificationError) {
+          logger.error({ processingId: job.processing_id, err: notificationError }, 'Unable to send duplicate verification message');
+        }
+      }
+      await notifyOriginalDuplicate(duplicateRecord, job.processing_id);
+      return;
+    }
+
+    if (finalResult?.verification?.verdict === 'VALID') {
+      const verification = finalResult.verification || {};
+      const canonicalEmail = verification.matched_transaction?.customer_email;
+      const captionEmail = job.caption_email?.toLowerCase();
+      const identityWasRecovered = verification.reason_code === 'IDENTITY_RECOVERED_FROM_STRIPE'
+        || (canonicalEmail && captionEmail && canonicalEmail.toLowerCase() !== captionEmail);
+      if (config.BOT_REPLY_ENABLED && (!job.caption_email || identityWasRecovered)) {
+        try {
+          await currentSock.sendMessage(groupId, {
+            text: formatOcrReply(finalResult, job.processing_id, job.caption_email || null),
+          }, { quoted: message });
+        } catch (notificationError) {
+          // Verification is already complete. A WhatsApp delivery failure
+          // must not turn a valid payment into a dead-lettered result.
+          logger.error({ processingId: job.processing_id, err: notificationError }, 'Unable to send valid payment message');
+        }
+      }
+      try {
+        await sendReaction(groupId, message, '✅');
+      } catch (notificationError) {
+        // Keep the financial verdict VALID even when reaction delivery is
+        // unavailable; do not re-enter the processing failure path.
+        logger.warn({ processingId: job.processing_id, err: notificationError }, 'Unable to send valid payment reaction');
+      }
+      return;
+    }
+
+    const verdict = finalResult?.verification?.verdict;
+    await notifyPrivateStripeReview(finalResult, job.processing_id);
+    if (config.BOT_REPLY_ENABLED && verdict !== 'VALID') {
+      try {
+        const replyResult = {
+          ...(finalResult || {}),
+          caption_email: finalResult?.caption_email || job.caption_email || null,
+        };
+        await currentSock.sendMessage(groupId, {
+          text: formatVerificationFailureReply(replyResult, job.processing_id),
+        }, { quoted: message });
+      } catch (notificationError) {
+        logger.error({ processingId: job.processing_id, err: notificationError }, 'Unable to send payment verification message');
+      }
+    }
+    // An ambiguous or operationally incomplete Stripe result is not proof of
+    // fraud. Keep the cross for a confirmed non-match/error, and use a review
+    // warning for UNCLEAR so a valid payment is not visually labelled fake.
+    const reaction = verdict === 'VALID' ? '✅' : verdict === 'INVALID' ? '❌' : '⚠️';
+    try {
+      await sendReaction(groupId, message, reaction);
+    } catch (notificationError) {
+      logger.warn({ processingId: job.processing_id, verdict: verdict || 'UNVERIFIED', err: notificationError }, 'Unable to send payment verification reaction');
+    }
+  };
+
+  const batchCandidateReasons = new Set([
+    'MULTIPLE_EXACT_MATCHES',
+    'MULTIPLE_IDENTITY_RECOVERY_MATCHES',
+    'MULTIPLE_TRANSACTION_ID_MATCHES',
+    'MULTIPLE_DATE_NAME_MATCHES',
+    'MULTIPLE_STRIPE_CANONICAL_MATCHES',
+  ]);
+
+  const flushPendingBatch = async (groupId, { force = false } = {}) => {
+    const entries = pendingBatchReconciliations.get(groupId) || [];
+    if (!entries.length) return;
+
+    const assignments = reconcileCandidateBatch(entries, {
+      maxEntries: config.BATCH_RECONCILIATION_MAX_ITEMS || 8,
+    });
+    const assignedProcessingIds = new Set(assignments.keys());
+    const remaining = [];
+    for (const entry of entries) {
+      const candidate = assignments.get(entry.processingId);
+      if (!candidate) {
+        remaining.push(entry);
+        continue;
+      }
+
+      let finalResult = {
+        ...entry.result,
+        verification: {
+          ...(entry.result.verification || {}),
+          status: 'MATCHED',
+          verdict: 'VALID',
+          reason_code: 'BATCH_UNIQUE_CANDIDATE_ASSIGNMENT',
+          stripe_charge_id: candidate.stripe_charge_id,
+          candidate_count: 1,
+          matched_transaction: candidate,
+        },
+      };
+      const transactionClaim = duplicateStore.claimTransaction(`stripe:${candidate.stripe_charge_id}`, {
+        processingId: entry.job.processing_id,
+        groupIdHash: hashGroupJid(groupId),
+        groupName: entry.job.group_name,
+        messageKey: entry.message.key,
+        message: entry.message,
+      });
+      let duplicateRecord = null;
+      if (transactionClaim.duplicate) {
+        finalResult = {
+          ...finalResult,
+          verification: {
+            ...finalResult.verification,
+            status: 'DUPLICATE',
+            verdict: 'DUPLICATE',
+            reason_code: 'DUPLICATE_STRIPE_TRANSACTION',
+            duplicate_of_processing_id: transactionClaim.record.processing_id,
+            duplicate_scope: duplicateScope(transactionClaim.record, groupId),
+            duplicate_group_name: transactionClaim.record.group_name,
+          },
+        };
+        duplicateRecord = transactionClaim.record;
+      } else {
+        const fields = entry.result?.fields || {};
+        duplicateStore.registerImageEvidence({
+          sha256: entry.imageHash,
+          phash: entry.result?.image_phash,
+          captionEmail: candidate.customer_email || fields.email || entry.job.caption_email,
+          amountCents: fields.amount_cents ?? candidate.amount_cents,
+          transactionId: fields.transaction_id || candidate.payment_identifier,
+          customerName: candidate.customer_name || fields.customer_name,
+          paymentDate: fields.payment_date || candidate.payment_date,
+          paymentMonth: Number.isInteger(fields.payment_month) ? fields.payment_month : null,
+          paymentDay: Number.isInteger(fields.payment_day) ? fields.payment_day : null,
+          paymentHour: Number.isInteger(Number(fields.payment_hour)) ? Number(fields.payment_hour) : null,
+          minutes: Number.isInteger(Number(fields.minutes)) ? Number(fields.minutes) : null,
+          stripeChargeId: candidate.stripe_charge_id,
+          verificationVerdict: 'VALID',
+          verificationReason: 'BATCH_UNIQUE_CANDIDATE_ASSIGNMENT',
+          processingId: entry.job.processing_id,
+          groupIdHash: hashGroupJid(groupId),
+          groupName: entry.job.group_name,
+          messageKey: entry.message.key,
+          message: entry.message,
+        });
+      }
+      await finalizeResult({
+        job: entry.job,
+        message: entry.message,
+        groupId,
+        finalResult,
+        duplicateRecord,
+      });
+      logger.info({ processingId: entry.processingId, stripeChargeId: candidate.stripe_charge_id }, 'Batch reconciliation assigned a unique Stripe candidate');
+    }
+
+    if (remaining.length && !force) {
+      pendingBatchReconciliations.set(groupId, remaining);
+      return;
+    }
+    for (const entry of remaining) {
+      await finalizeResult({
+        job: entry.job,
+        message: entry.message,
+        groupId,
+        finalResult: entry.result,
+      });
+    }
+    pendingBatchReconciliations.delete(groupId);
+    if (assignedProcessingIds.size || force) batchFlushTimers.delete(groupId);
+  };
+
+  const requestBatchFlush = (groupId, options = {}) => {
+    const previous = batchFlushLocks.get(groupId) || Promise.resolve();
+    const current = previous
+      .catch(() => {})
+      .then(() => flushPendingBatch(groupId, options))
+      .finally(() => {
+        if (batchFlushLocks.get(groupId) === current) batchFlushLocks.delete(groupId);
+      });
+    batchFlushLocks.set(groupId, current);
+    return current;
+  };
+
+  const deferBatchReview = entry => {
+    const groupId = entry.job.group_id;
+    const entries = pendingBatchReconciliations.get(groupId) || [];
+    entries.push(entry);
+    const maxItems = Math.max(1, config.BATCH_RECONCILIATION_MAX_ITEMS || 8);
+    const overflow = entries.length > maxItems ? entries.splice(0, entries.length - maxItems) : [];
+    pendingBatchReconciliations.set(groupId, entries);
+    // Keep memory bounded without silently losing a review outcome. An item
+    // outside the bounded batch is finalized review-only, never approved.
+    if (overflow.length) {
+      void Promise.all(overflow.map(item => finalizeResult({
+        job: item.job,
+        message: item.message,
+        groupId,
+        finalResult: item.result,
+      })));
+    }
+    if (batchFlushTimers.has(groupId)) clearTimeout(batchFlushTimers.get(groupId));
+    const windowMs = config.BATCH_RECONCILIATION_WINDOW_MS ?? 2500;
+    batchFlushTimers.set(groupId, setTimeout(() => {
+      batchFlushTimers.delete(groupId);
+      void requestBatchFlush(groupId, { force: true });
+    }, Math.max(0, windowMs)));
+    // Attempt reconciliation as soon as a second screenshot arrives. This is
+    // important when Stripe lookups are slow: the queue is serial, so a timer
+    // alone would finalize the first ambiguous item before the next one was
+    // available. Unresolved entries remain buffered for the next screenshot.
+    if (entries.length > 1) void requestBatchFlush(groupId);
+  };
 
   const processJob = async job => {
     let tempPath = null;
@@ -412,67 +641,34 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
         };
       }
 
-      if (finalResult?.verification?.verdict === 'DUPLICATE') {
-        if (config.BOT_REPLY_ENABLED) {
-          try {
-            await currentSock.sendMessage(groupId, {
-              text: formatDuplicateReply(finalResult, job.processing_id, {
-                groupScope: finalResult.verification.duplicate_scope,
-                originalGroupName: finalResult.verification.duplicate_group_name,
-              }),
-            }, { quoted: message });
-          } catch (notificationError) {
-            logger.error({ processingId: job.processing_id, err: notificationError }, 'Unable to send duplicate verification message');
-          }
-        }
-        await notifyOriginalDuplicate(duplicateRecord, job.processing_id);
-      } else if (finalResult?.verification?.verdict === 'VALID') {
-        const verification = finalResult.verification || {};
-        const canonicalEmail = verification.matched_transaction?.customer_email;
-        const captionEmail = job.caption_email?.toLowerCase();
-        const identityWasRecovered = verification.reason_code === 'IDENTITY_RECOVERED_FROM_STRIPE'
-          || (canonicalEmail && captionEmail && canonicalEmail.toLowerCase() !== captionEmail);
-        if (config.BOT_REPLY_ENABLED && (!job.caption_email || identityWasRecovered)) {
-          try {
-            await currentSock.sendMessage(groupId, {
-              text: formatOcrReply(finalResult, job.processing_id, job.caption_email || null),
-            }, { quoted: message });
-          } catch (notificationError) {
-            // Verification is already complete. A WhatsApp delivery failure
-            // must not turn a valid payment into a dead-lettered result.
-            logger.error({ processingId: job.processing_id, err: notificationError }, 'Unable to send valid payment message');
-          }
-        }
-        try {
-          await sendReaction(groupId, message, '✅');
-        } catch (notificationError) {
-          // Keep the financial verdict VALID even when reaction delivery is
-          // unavailable; do not re-enter the processing failure path.
-          logger.warn({ processingId: job.processing_id, err: notificationError }, 'Unable to send valid payment reaction');
-        }
-      } else {
-        const verdict = finalResult?.verification?.verdict;
-        await notifyPrivateStripeReview(finalResult, job.processing_id);
-        if (config.BOT_REPLY_ENABLED && verdict !== 'VALID') {
-          try {
-            await currentSock.sendMessage(groupId, {
-              text: formatVerificationFailureReply(finalResult, job.processing_id),
-            }, { quoted: message });
-          } catch (notificationError) {
-            logger.error({ processingId: job.processing_id, err: notificationError }, 'Unable to send payment verification message');
-          }
-        }
-        // An ambiguous or operationally incomplete Stripe result is not proof
-        // of fraud. Keep the client-requested cross for a confirmed
-        // non-match/error, but use a review warning for UNCLEAR so a valid
-        // payment is not visually labeled as fake while it needs review.
-        const reaction = verdict === 'VALID' ? '✅' : verdict === 'INVALID' ? '❌' : '⚠️';
-        try {
-          await sendReaction(groupId, message, reaction);
-        } catch (notificationError) {
-          logger.warn({ processingId: job.processing_id, verdict: verdict || 'UNVERIFIED', err: notificationError }, 'Unable to send payment verification reaction');
-        }
+      const candidateReview = finalResult?.verification?.verdict === 'UNCLEAR'
+        && batchCandidateReasons.has(finalResult?.verification?.reason_code)
+        && Array.isArray(finalResult?.verification?.candidate_transactions)
+        && finalResult.verification.candidate_transactions.length > 1;
+      if (config.BATCH_RECONCILIATION_ENABLED !== false && candidateReview) {
+        deferBatchReview({
+          processingId: job.processing_id,
+          job,
+          message,
+          groupId,
+          imageHash,
+          imageEvidence,
+          result: finalResult,
+        });
+        logger.info({
+          processingId: job.processing_id,
+          candidateCount: finalResult.verification.candidate_transactions.length,
+        }, 'Ambiguous Stripe result deferred for bounded batch reconciliation');
+        return { status: 'COMPLETED', verdict: 'DEFERRED_RECONCILIATION', processing_id: job.processing_id };
       }
+
+      await finalizeResult({
+        job,
+        message,
+        groupId,
+        finalResult,
+        duplicateRecord,
+      });
 
       const verification = finalResult?.verification || {};
       logger.info({
@@ -508,6 +704,7 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
       try {
         await getSock().sendMessage(job.group_id, {
           text: formatVerificationFailureReply({
+            caption_email: job.caption_email || null,
             verification: {
               verdict: 'ERROR',
               reason_code: error?.code || 'PROCESSING_FAILED',
@@ -651,7 +848,15 @@ function createMessageHandler(sock, config, logger, dependencies = {}) {
   };
 
   handler.start = () => queue.start();
-  handler.stop = () => queue.stop();
+  handler.stop = () => {
+    for (const timerId of batchFlushTimers.values()) clearTimeout(timerId);
+    batchFlushTimers.clear();
+    void Promise.all([...pendingBatchReconciliations.keys()].map(groupId => requestBatchFlush(groupId, { force: true })));
+    queue.stop();
+  };
+  handler.flushPendingReconciliations = async () => {
+    await Promise.all([...pendingBatchReconciliations.keys()].map(groupId => requestBatchFlush(groupId, { force: true })));
+  };
   handler.queue = queue;
   return handler;
 }

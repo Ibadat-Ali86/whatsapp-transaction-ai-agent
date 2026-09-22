@@ -5,14 +5,6 @@
  * @param {string|null} captionEmail - The normalized WhatsApp caption email
  * @returns {string} The formatted reply message
  */
-function maskEmail(email) {
-  if (typeof email !== 'string' || !email.includes('@')) return 'Not available';
-  const [local, domain] = email.trim().split('@');
-  if (!local || !domain) return 'Not available';
-  if (local.length === 1) return `*@${domain}`;
-  return `${local[0]}***${local[local.length - 1]}@${domain}`;
-}
-
 function maskIdentifier(value) {
   if (typeof value !== 'string' || !value.trim()) return 'Not available';
   const identifier = value.trim();
@@ -39,7 +31,7 @@ function formatReceiptEvidence(ocrResult) {
   const time = hasTime
     ? `${String(fields.payment_hour).padStart(2, '0')}:${String(fields.minutes).padStart(2, '0')}`
     : 'Not extracted';
-  const email = fields.email ? maskEmail(fields.email) : 'Not extracted';
+  const email = fields.email || ocrResult?.caption_email || 'Not extracted';
   const transactionId = fields.transaction_id
     ? safeEvidenceValue(fields.transaction_id)
     : 'Not extracted';
@@ -68,6 +60,12 @@ function formatReviewJustification(ocrResult, verification) {
   }
   if (reason === 'MULTIPLE_EXACT_MATCHES' || reason === 'MULTIPLE_IDENTITY_RECOVERY_MATCHES') {
     return '🔎 *Why review:* Amount, status, method, and available date/time/identity evidence matched more than one Stripe charge. Recency alone is not proof of which payment this screenshot represents, so no candidate was approved.';
+  }
+  if (reason === 'MULTIPLE_STRIPE_CANONICAL_MATCHES') {
+    return '🔎 *Why review:* Stripe returned more than one eligible charge matching the amount, strong identity evidence, and the bounded receipt-time window. Stripe is authoritative, but the screenshot did not identify one unique record.';
+  }
+  if (reason === 'MULTIPLE_DATE_BOUNDARY_MATCHES') {
+    return '🔎 *Why review:* Stripe returned more than one eligible charge across the bounded receipt-date timezone boundary. The bot did not choose one by recency, so client confirmation is required.';
   }
   if (reason === 'MULTIPLE_TRANSACTION_ID_MATCHES') {
     return '🔎 *Why review:* The provider identifier was associated with multiple eligible Stripe records. Because the identifier was not unique, no record was selected.';
@@ -126,7 +124,7 @@ function formatOcrReply(ocrResult, processingId, captionEmail = null) {
   if (canonicalStripeEmail) {
     reply += captionEmailPresent
       ? `📧 Email: ${canonicalStripeEmail}\n`
-      : `📧 Verified Stripe email (masked): ${maskEmail(canonicalStripeEmail)}\n`;
+      : `📧 Verified Stripe email: ${canonicalStripeEmail}\n`;
   } else if (captionEmailPresent) {
     reply += `📧 Email: ${providedCaptionEmail}\n`;
   } else {
@@ -221,7 +219,7 @@ function formatStripeCandidateReview(verification, ocrResult = {}) {
     report += `✅ Status: ${formatValue(candidate.status)}\n`;
     report += `🕒 Stripe Time: ${paymentDate} ${paymentTime}\n`;
     report += `👤 Customer: ${formatValue(candidate.customer_name)}\n`;
-    report += `📧 Email (masked): ${candidate.customer_email ? maskEmail(candidate.customer_email) : 'Not available'}\n`;
+    report += `📧 Email: ${candidate.customer_email || 'Not available'}\n`;
     report += `🆔 Stripe Customer: ${candidate.stripe_customer_id ? maskIdentifier(candidate.stripe_customer_id) : 'Not available'}\n`;
     report += `🔢 Payment identifier: ${candidate.payment_identifier ? maskIdentifier(candidate.payment_identifier) : 'Not available'}\n`;
     report += `💳 Method: ${formatValue(candidate.payment_method_type)}\n`;
@@ -282,11 +280,17 @@ function formatPrivateStripeCandidateReview(ocrResult, processingId) {
 function formatVerificationFailureReply(ocrResult, processingId) {
   const verification = ocrResult?.verification || {};
   const reason = verification.reason_code || 'VERIFICATION_NOT_CONFIRMED';
+  const operationalReasons = new Set([
+    'STRIPE_NETWORK_ERROR',
+    'STRIPE_API_ERROR',
+    'STRIPE_RATE_LIMITED',
+    'STRIPE_INVALID_RESPONSE',
+    'STRIPE_REQUEST_RETRY_EXHAUSTED',
+  ]);
   const isOperationalError = verification.verdict === 'ERROR'
     || reason.startsWith('N8N_')
     || reason.startsWith('PROCESSING_')
-    || reason === 'STRIPE_NETWORK_ERROR'
-    || reason === 'STRIPE_API_ERROR';
+    || operationalReasons.has(reason);
   const isUnclear = verification.verdict === 'UNCLEAR' || isOperationalError;
   const candidateCount = Number.isInteger(verification.candidate_count)
     ? verification.candidate_count
@@ -296,6 +300,8 @@ function formatVerificationFailureReply(ocrResult, processingId) {
     MULTIPLE_EXACT_MATCHES: 'Stripe returned multiple eligible payments, so the payment could not be uniquely confirmed.',
     MULTIPLE_IDENTITY_RECOVERY_MATCHES: 'Stripe returned multiple possible payments, so the payment could not be uniquely confirmed.',
     MULTIPLE_TRANSACTION_ID_MATCHES: 'The payment identifier matched multiple Stripe records, so no payment was approved.',
+    MULTIPLE_STRIPE_CANONICAL_MATCHES: 'Stripe returned multiple eligible records after canonical reconciliation, so no payment was selected automatically.',
+    MULTIPLE_DATE_BOUNDARY_MATCHES: 'Stripe returned multiple eligible records across the bounded receipt-date timezone boundary, so no payment was selected automatically.',
     TIMEZONE_BOUNDARY_SINGLE_MATCH: 'Stripe uniquely matched the amount, receipt minute, eligible Cash App payment, and strong identity evidence across a bounded timezone boundary.',
     STRIPE_PAGINATION_LIMIT: 'Stripe search reached its safety limit before a unique payment could be confirmed.',
     STRIPE_DISABLED: 'Stripe verification is disabled for this bot instance.',
@@ -303,6 +309,9 @@ function formatVerificationFailureReply(ocrResult, processingId) {
     IMAGE_MATCH_DIFFERENT_STRIPE_CHARGE: 'A previously approved receipt image matched this submission, but Stripe returned a different charge. Automatic approval was blocked because the image evidence conflicts with the new payment record.',
     STRIPE_NETWORK_ERROR: 'Stripe could not be reached; the payment was not approved.',
     STRIPE_API_ERROR: 'Stripe returned an API error; the payment was not approved.',
+    STRIPE_RATE_LIMITED: 'Stripe temporarily rate-limited the lookup; the payment was not approved.',
+    STRIPE_INVALID_RESPONSE: 'Stripe returned an unusable response; the payment was not approved.',
+    STRIPE_REQUEST_RETRY_EXHAUSTED: 'Stripe remained unavailable after bounded retries; the payment was not approved.',
     N8N_EMPTY_RESPONSE: 'The OCR verification workflow returned no response; the payment was not approved.',
     N8N_INVALID_RESPONSE: 'The OCR verification workflow returned an unsupported response; the payment was not approved.',
     PROCESSING_FAILED: 'The payment pipeline failed before verification completed; the payment was not approved.',
@@ -324,6 +333,8 @@ function formatVerificationFailureReply(ocrResult, processingId) {
   const candidateReport = reason === 'MULTIPLE_EXACT_MATCHES'
     || reason === 'MULTIPLE_IDENTITY_RECOVERY_MATCHES'
     || reason === 'MULTIPLE_TRANSACTION_ID_MATCHES'
+    || reason === 'MULTIPLE_STRIPE_CANONICAL_MATCHES'
+    || reason === 'MULTIPLE_DATE_BOUNDARY_MATCHES'
     ? formatStripeCandidateReview(verification, ocrResult)
     : '';
   const evidence = formatReceiptEvidence(ocrResult);

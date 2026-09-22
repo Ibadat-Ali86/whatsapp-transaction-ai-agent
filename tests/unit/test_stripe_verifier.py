@@ -346,6 +346,107 @@ async def test_unique_date_and_customer_name_recovers_when_minute_is_misread():
 
 
 @pytest.mark.asyncio
+async def test_captionless_date_and_customer_name_recovers_one_unique_charge():
+    def responses(request):
+        assert request.url.path == "/v1/charges/search"
+        return httpx.Response(200, json={
+            "data": [charge(
+                "ch_captionless_name_recovery",
+                created=stripe_timestamp(hour=14, minute=12),
+                billing_details={"name": "Jeremy Elder"},
+                receipt_email="jeremy@example.com",
+            )],
+            "has_more": False,
+        })
+
+    result, _ = await verify_with_responses(
+        responses,
+        evidence_value=PaymentEvidence(
+            email=None,
+            amount_cents=2500,
+            payment_date=datetime(2026, 9, 9, tzinfo=timezone.utc).date(),
+            payment_hour=14,
+            minutes=31,
+            customer_name="Jeremy Elder",
+        ),
+    )
+
+    assert result.status == "MATCHED"
+    assert result.verdict == "VALID"
+    assert result.reason_code == "CAPTIONLESS_DATE_NAME_SINGLE_MATCH"
+    assert result.stripe_charge_id == "ch_captionless_name_recovery"
+    assert result.matched_transaction["customer_email"] == "jeremy@example.com"
+
+
+@pytest.mark.asyncio
+async def test_stripe_canonical_recovery_ignores_wrong_receipt_minute_but_stays_bounded():
+    def responses(request):
+        assert request.url.path == "/v1/charges/search"
+        return httpx.Response(200, json={
+            "data": [charge(
+                "ch_canonical_recovery",
+                created=int(datetime(2026, 9, 10, 1, 12, tzinfo=timezone.utc).timestamp()),
+                billing_details={"name": "Jeremy Elder"},
+                receipt_email="jeremy@example.com",
+            )],
+            "has_more": False,
+        })
+
+    result, _ = await verify_with_responses(
+        responses,
+        evidence_value=PaymentEvidence(
+            email=None,
+            amount_cents=2500,
+            payment_date=datetime(2026, 9, 9, tzinfo=timezone.utc).date(),
+            payment_hour=14,
+            minutes=31,
+            customer_name="Jeremy Elder",
+        ),
+    )
+
+    assert result.verdict == "VALID"
+    assert result.reason_code == "STRIPE_CANONICAL_RECOVERY_SINGLE_MATCH"
+    assert result.stripe_charge_id == "ch_canonical_recovery"
+
+
+@pytest.mark.asyncio
+async def test_stripe_canonical_recovery_keeps_two_candidates_unclear():
+    def responses(request):
+        assert request.url.path == "/v1/charges/search"
+        return httpx.Response(200, json={
+            "data": [
+                charge(
+                    "ch_canonical_one",
+                    created=int(datetime(2026, 9, 10, 1, 12, tzinfo=timezone.utc).timestamp()),
+                    billing_details={"name": "Jeremy Elder"},
+                ),
+                charge(
+                    "ch_canonical_two",
+                    created=int(datetime(2026, 9, 10, 1, 22, tzinfo=timezone.utc).timestamp()),
+                    billing_details={"name": "Jeremy Elder"},
+                ),
+            ],
+            "has_more": False,
+        })
+
+    result, _ = await verify_with_responses(
+        responses,
+        evidence_value=PaymentEvidence(
+            email=None,
+            amount_cents=2500,
+            payment_date=datetime(2026, 9, 9, tzinfo=timezone.utc).date(),
+            payment_hour=14,
+            minutes=31,
+            customer_name="Jeremy Elder",
+        ),
+    )
+
+    assert result.verdict == "UNCLEAR"
+    assert result.reason_code == "MULTIPLE_STRIPE_CANONICAL_MATCHES"
+    assert result.candidate_count == 2
+
+
+@pytest.mark.asyncio
 async def test_captionless_lookup_can_enforce_known_receipt_timezone():
     charge_created = int(datetime(2026, 8, 14, 14, 23, tzinfo=timezone.utc).timestamp())
 
@@ -1147,6 +1248,98 @@ async def test_wrong_amount_is_not_approved():
     assert result.status == "NO_MATCH"
     assert result.verdict == "UNCLEAR"
     assert result.stripe_charge_id is None
+
+
+@pytest.mark.asyncio
+async def test_unique_amount_and_receipt_minute_recovers_across_date_boundary_without_identity():
+    charge_created = int(datetime(2026, 9, 22, 1, 4, tzinfo=timezone.utc).timestamp())
+
+    def responses(request):
+        assert request.url.path == "/v1/charges/search"
+        return httpx.Response(200, json={
+            "data": [charge(
+                "ch_date_boundary_unique",
+                amount=2000,
+                created=charge_created,
+                customer=None,
+                receipt_email=None,
+            )],
+            "has_more": False,
+        })
+
+    result, _ = await verify_with_responses(
+        responses,
+        evidence_value=PaymentEvidence(
+            email=None,
+            amount_cents=2000,
+            payment_date=datetime(2026, 9, 21, tzinfo=timezone.utc).date(),
+            minutes=4,
+        ),
+    )
+
+    assert result.verdict == "VALID"
+    assert result.reason_code == "DATE_BOUNDARY_SINGLE_MATCH"
+    assert result.stripe_charge_id == "ch_date_boundary_unique"
+
+
+@pytest.mark.asyncio
+async def test_date_boundary_keeps_multiple_eligible_charges_review_required():
+    def responses(request):
+        assert request.url.path == "/v1/charges/search"
+        return httpx.Response(200, json={
+            "data": [
+                charge("ch_date_boundary_one", amount=2000, created=int(datetime(2026, 9, 22, 1, 4, tzinfo=timezone.utc).timestamp()), customer=None),
+                charge("ch_date_boundary_two", amount=2000, created=int(datetime(2026, 9, 20, 1, 4, tzinfo=timezone.utc).timestamp()), customer=None),
+            ],
+            "has_more": False,
+        })
+
+    result, _ = await verify_with_responses(
+        responses,
+        evidence_value=PaymentEvidence(
+            email=None,
+            amount_cents=2000,
+            payment_date=datetime(2026, 9, 21, tzinfo=timezone.utc).date(),
+            minutes=4,
+        ),
+    )
+
+    assert result.verdict == "UNCLEAR"
+    assert result.reason_code == "MULTIPLE_DATE_BOUNDARY_MATCHES"
+    assert result.candidate_count == 2
+
+
+@pytest.mark.asyncio
+async def test_date_only_email_receipt_recovers_unique_charge_across_boundary():
+    charge_created = int(datetime(2026, 9, 22, 1, 4, tzinfo=timezone.utc).timestamp())
+
+    def responses(request):
+        if request.url.path == "/v1/customers":
+            return httpx.Response(200, json={"data": [{"id": "cus_boundary", "email": "customer@example.com"}]})
+        assert request.url.path in {"/v1/charges", "/v1/charges/search"}
+        return httpx.Response(200, json={
+            "data": [charge(
+                "ch_email_date_boundary",
+                amount=800,
+                created=charge_created,
+                customer="cus_boundary",
+                receipt_email="customer@example.com",
+            )],
+            "has_more": False,
+        })
+
+    result, _ = await verify_with_responses(
+        responses,
+        evidence_value=PaymentEvidence(
+            email="customer@example.com",
+            amount_cents=800,
+            payment_date=datetime(2026, 9, 21, tzinfo=timezone.utc).date(),
+        ),
+    )
+
+    assert result.verdict == "VALID"
+    assert result.reason_code == "DATE_BOUNDARY_SINGLE_MATCH"
+    assert result.stripe_charge_id == "ch_email_date_boundary"
 
 
 @pytest.mark.asyncio

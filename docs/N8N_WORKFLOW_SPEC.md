@@ -134,6 +134,24 @@ Every external node should define:
 - failure branch;
 - safe error message.
 
+The OCR HTTP node must use `neverError` with JSON response handling and must
+feed a normalization code node before Stripe preparation. That node must
+always provide an object with `fields` (an empty object when OCR degraded), so
+an OCR 5xx response cannot discard the caption identity or terminate the
+workflow before Stripe gets a chance to perform a bounded lookup. The
+WhatsApp adapter also accepts `fields: null`/structured OCR error envelopes
+without treating them as successful payment proof.
+
+The Stripe verification HTTP node uses a 120-second timeout in production and
+is configured with `neverError` plus JSON response handling. The verifier can
+return a structured `ERROR`/`UNCLEAR` result with an HTTP 503 when Stripe is
+temporarily unavailable; n8n must pass that body to the formatter instead of
+terminating the workflow or dead-lettering the screenshot. Stripe
+list/search reconciliation may require bounded fallback requests for
+captionless receipts; a timeout is a technical verification failure and must
+never be converted into an invalid-payment decision. The WhatsApp bot's
+`N8N_TIMEOUT_MS` must remain longer than this node timeout.
+
 ## Idempotency
 
 The workflow must avoid processing the same WhatsApp message twice.

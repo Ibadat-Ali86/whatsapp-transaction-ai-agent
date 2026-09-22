@@ -25,7 +25,11 @@ const config = {
   N8N_WEBHOOK_URL: process.env.N8N_WEBHOOK_URL || '',
   N8N_WEBHOOK_TOKEN: process.env.N8N_WEBHOOK_TOKEN || '',
   N8N_HEALTH_TIMEOUT_MS: parseInteger(process.env.N8N_HEALTH_TIMEOUT_MS, 5000),
-  N8N_TIMEOUT_MS: parseInteger(process.env.N8N_TIMEOUT_MS, 60000),
+  // The n8n Stripe node is allowed to perform bounded reconciliation and is
+  // configured for 120s in the production workflow. Keep the bot deadline
+  // slightly longer so a slow-but-valid structured Stripe result is not
+  // converted into a transport failure or dead-letter item.
+  N8N_TIMEOUT_MS: parseInteger(process.env.N8N_TIMEOUT_MS, 150000),
   N8N_RETRY_ATTEMPTS: parseInteger(process.env.N8N_RETRY_ATTEMPTS, 2),
   STRIPE_VERIFICATION_ENABLED: process.env.STRIPE_VERIFICATION_ENABLED === 'true',
   STRIPE_TIMEZONE: process.env.STRIPE_TIMEZONE || 'UTC',
@@ -54,6 +58,9 @@ const config = {
   BOT_REPLY_ENABLED: process.env.BOT_REPLY_ENABLED !== 'false',
   BOT_REACTIONS_ENABLED: process.env.BOT_REACTIONS_ENABLED !== 'false',
   BOT_PROCESSING_REACTIONS_ENABLED: process.env.BOT_PROCESSING_REACTIONS_ENABLED !== 'false',
+  BATCH_RECONCILIATION_ENABLED: process.env.BATCH_RECONCILIATION_ENABLED !== 'false',
+  BATCH_RECONCILIATION_WINDOW_MS: parseNonNegativeInteger(process.env.BATCH_RECONCILIATION_WINDOW_MS, 2500),
+  BATCH_RECONCILIATION_MAX_ITEMS: parseInteger(process.env.BATCH_RECONCILIATION_MAX_ITEMS, 8),
 };
 
 if (!config.ALLOWED_GROUP_JIDS.length) {

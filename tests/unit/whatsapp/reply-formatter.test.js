@@ -64,7 +64,7 @@ test('uses Stripe transaction details when verification returns the canonical ch
   assert.match(reply, /Stripe Payment Time: 00:13/);
 });
 
-test('explains a captionless valid payment with Stripe proof and masks public identifiers', () => {
+test('explains a captionless valid payment with the full Stripe email', () => {
   const reply = formatOcrReply({
     provider: 'tesseract',
     confidence: 0.92,
@@ -90,12 +90,12 @@ test('explains a captionless valid payment with Stripe proof and masks public id
   }, 'wa-captionless-proof');
 
   assert.match(reply, /Caption email: Not provided/);
-  assert.match(reply, /Verified Stripe email \(masked\): v\*\*\*m@example\.com/);
+  assert.match(reply, /Verified Stripe email: vanpham@example\.com/);
   assert.match(reply, /Description: Cash App payment/);
   assert.match(reply, /Stripe Payment Time: 01:43/);
   assert.match(reply, /Justification: No email was supplied in the caption/);
   assert.match(reply, /Stripe Charge: ch_…123456/);
-  assert.doesNotMatch(reply, /vanpham@example\.com/);
+  assert.doesNotMatch(reply, /Verified Stripe email \(masked\)/);
   assert.doesNotMatch(reply, /cus_private_123456/);
 });
 
@@ -184,6 +184,8 @@ test('formats an ambiguous payment as review-required rather than fake', () => {
   assert.match(reply, /Only the newest of 2 eligible candidate records is shown/);
   assert.match(reply, /Candidate 1 — Most Recent/);
   assert.match(reply, /ch_…recent/);
+  assert.match(reply, /📧 Email: jenny@example\.com/);
+  assert.doesNotMatch(reply, /Email \(masked\)/);
   assert.match(reply, /Recent payment/);
   assert.doesNotMatch(reply, /Candidate 2 — Match 2/);
   assert.doesNotMatch(reply, /ch_…evious/);
@@ -193,6 +195,7 @@ test('formats an ambiguous payment as review-required rather than fake', () => {
 
 test('formats operational verification failures as review rather than invalid', () => {
   const reply = formatVerificationFailureReply({
+    caption_email: 'scottlorenz1978@gmail.com',
     verification: {
       verdict: 'ERROR',
       reason_code: 'N8N_INVALID_RESPONSE',
@@ -202,6 +205,7 @@ test('formats operational verification failures as review rather than invalid', 
   assert.match(reply, /⚠️ \*Payment Requires Review\*/);
   assert.doesNotMatch(reply, /❌ \*Payment Not Confirmed\*/);
   assert.match(reply, /Verification did not complete/);
+  assert.match(reply, /Receipt email: scottlorenz1978@gmail\.com/);
 });
 
 test('explains missing unique proof when a receipt identifier was visible', () => {

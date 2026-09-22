@@ -170,8 +170,8 @@ test('processes a captionless image so Stripe can recover identity from OCR evid
 
   assert.equal(events.length, 2);
   assert.match(events[0].text, /Caption email: Not provided/);
-  assert.match(events[0].text, /Verified Stripe email \(masked\): r\*\*\*d@example\.com/);
-  assert.doesNotMatch(events[0].text, /recovered@example\.com/);
+  assert.match(events[0].text, /Verified Stripe email: recovered@example\.com/);
+  assert.doesNotMatch(events[0].text, /Verified Stripe email \(masked\)/);
   assert.match(events[0].text, /Justification: No email was supplied in the caption/);
   assert.match(events[0].text, /Stripe Verification: VALID/);
   assert.deepEqual(events[1], { react: { text: '✅', key: imageMessage('1234567890-1234567890@g.us').key } });
@@ -399,10 +399,86 @@ test('uses a review reaction and justification for an unresolved payment', async
 
   const message = imageMessage('1234567890-1234567890@g.us');
   await handler({ messages: [message] });
+  await handler.flushPendingReconciliations();
 
   assert.match(replies[0].text, /Payment Requires Review/);
   assert.match(replies[0].text, /MULTIPLE_EXACT_MATCHES/);
   assert.deepEqual(replies[1], { react: { text: '⚠️', key: message.key } });
+});
+
+test('reconciles a same-group multi-screenshot candidate batch one-to-one', async () => {
+  const reactions = [];
+  const groupId = '1234567890-1234567890@g.us';
+  const candidates = [
+    {
+      stripe_charge_id: 'ch-batch-one',
+      amount_cents: 1000,
+      customer_email: 'customer@example.com',
+      customer_name: 'Jamie Example',
+      payment_date: '2026-09-21',
+      payment_time: '10:05',
+      status: 'Completed',
+      payment_method_type: 'cashapp',
+    },
+    {
+      stripe_charge_id: 'ch-batch-two',
+      amount_cents: 1000,
+      customer_email: 'customer@example.com',
+      customer_name: 'Jamie Example',
+      payment_date: '2026-09-21',
+      payment_time: '10:30',
+      status: 'Completed',
+      payment_method_type: 'cashapp',
+    },
+  ];
+  const first = captionedImageMessage(groupId, 'batch-one');
+  const second = captionedImageMessage(groupId, 'batch-two');
+  const handler = createMessageHandler({
+    sendMessage: async (_jid, content) => reactions.push(content),
+  }, {
+    ALLOWED_GROUP_JIDS: [groupId],
+    BOT_REPLY_ENABLED: false,
+    BOT_REACTIONS_ENABLED: true,
+    N8N_ENABLED: false,
+    BATCH_RECONCILIATION_ENABLED: true,
+    BATCH_RECONCILIATION_WINDOW_MS: 50,
+    BATCH_RECONCILIATION_MAX_ITEMS: 8,
+    PROCESSING_QUEUE_COOLDOWN_MS: 0,
+  }, logger, {
+    duplicateStore: duplicateStore(),
+    downloadImage: async (_sock, message) => ({
+      imageBytes: Buffer.from(message.key.id),
+      mimeType: 'image/png',
+      tempPath: null,
+    }),
+    processImageOCR: async (_params) => {
+      // The queue preserves message order; use the image bytes supplied by the
+      // downloader through the deterministic message id for the test shape.
+      const selectedTime = _params.messageId === 'batch-one' ? [10, 5] : [10, 30];
+      return {
+        fields: {
+          amount_cents: 1000,
+          customer_name: 'Jamie Example',
+          payment_date: '2026-09-21',
+          payment_hour: selectedTime[0],
+          minutes: String(selectedTime[1]),
+        },
+        verification: {
+          verdict: 'UNCLEAR',
+          reason_code: 'MULTIPLE_EXACT_MATCHES',
+          candidate_count: 2,
+          candidate_transactions: candidates,
+        },
+      };
+    },
+  });
+
+  await handler({ messages: [first, second] });
+  await handler.flushPendingReconciliations();
+
+  assert.equal(reactions.filter(event => event.react?.text === '✅').length, 2);
+  assert.equal(reactions.filter(event => event.react?.text === '⚠️').length, 0);
+  handler.stop();
 });
 
 test('sends complete multi-match proof only to configured private admins', async () => {
@@ -456,6 +532,7 @@ test('sends complete multi-match proof only to configured private admins', async
 
   const message = imageMessage('1234567890-1234567890@g.us');
   await handler({ messages: [message] });
+  await handler.flushPendingReconciliations();
 
   const privateProof = sent.find(event => event.jid === adminJid);
   const groupReply = sent.find(event => event.jid === message.key.remoteJid && event.content?.text);
@@ -465,7 +542,7 @@ test('sends complete multi-match proof only to configured private admins', async
   assert.match(privateProof.content.text, /ch_older_full/);
   assert.match(privateProof.content.text, /Do not forward it to public groups/);
   assert.ok(groupReply);
-  assert.doesNotMatch(groupReply.content.text, /alexis@example\.com/);
+  assert.match(groupReply.content.text, /alexis@example\.com/);
   assert.doesNotMatch(groupReply.content.text, /ch_recent_full/);
 });
 
