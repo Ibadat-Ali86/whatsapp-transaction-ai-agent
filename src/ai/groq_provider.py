@@ -82,77 +82,102 @@ class GroqVisionProvider(VisionProvider):
         
         base64_image = base64.b64encode(image_bytes).decode('utf-8')
         
-        try:
-            response = self.client.chat.completions.create(
-                model=self.settings.GROQ_VISION_MODEL,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": PROMPT},
-                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
-                        ]
-                    }
-                ],
-                # The configured Qwen vision models support JSON Object Mode.
-                # This prevents normal model prose/reasoning from being mixed
-                # into the extraction.
-                response_format={"type": "json_object"},
-                # The extraction schema is deliberately small. Keep the
-                # provider request below low-tier output-token limits instead
-                # of accepting the SDK default, which can be 2048 tokens.
-                max_tokens=self.settings.GROQ_MAX_OUTPUT_TOKENS,
-                timeout=30.0,
-                temperature=0.0
-            )
-            
-            raw_text = response.choices[0].message.content or ""
-            
-            # Parse defensively because provider responses can still be
-            # wrapped by compatibility layers or contain model artifacts.
+        # Retry up to 3 times for transient 429 / timeout / connection errors.
+        # Exponential back-off: 1 s → 2 s → 4 s before propagating failure.
+        # Non-retryable errors (JSON parse, bad key) propagate immediately.
+        _MAX_ATTEMPTS = 3
+        _RETRY_DELAYS_S = (1.0, 2.0, 4.0)
+        last_exc: Exception = RuntimeError("unreachable")
+
+        for attempt in range(_MAX_ATTEMPTS):
             try:
-                fields = parse_json_object(raw_text)
-            except (JSONDecodeError, ValueError) as parse_error:
+                response = self.client.chat.completions.create(
+                    model=self.settings.GROQ_VISION_MODEL,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": PROMPT},
+                                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+                            ]
+                        }
+                    ],
+                    # The configured Qwen vision models support JSON Object Mode.
+                    # This prevents normal model prose/reasoning from being mixed
+                    # into the extraction.
+                    response_format={"type": "json_object"},
+                    # The extraction schema is deliberately small. Keep the
+                    # provider request below low-tier output-token limits instead
+                    # of accepting the SDK default, which can be 2048 tokens.
+                    max_tokens=self.settings.GROQ_MAX_OUTPUT_TOKENS,
+                    timeout=30.0,
+                    temperature=0.0
+                )
+
+                raw_text = response.choices[0].message.content or ""
+
+                # Parse defensively because provider responses can still be
+                # wrapped by compatibility layers or contain model artifacts.
+                try:
+                    fields = parse_json_object(raw_text)
+                except (JSONDecodeError, ValueError) as parse_error:
+                    logger.log_error(
+                        "AI_EXTRACTION",
+                        "JSON_PARSE_ERROR",
+                        processing_id,
+                        safe_details=str(parse_error),
+                    )
+                    raise AIProviderError(
+                        'groq',
+                        retryable=False,
+                        safe_message='Groq returned invalid structured output',
+                    ) from parse_error
+
+                duration_ms = int((time.time() - start_time) * 1000)
+
+                return AIExtractionResult(
+                    provider_name=self.name,
+                    raw_text=raw_text,
+                    fields=fields,
+                    confidence=1.0 if fields else 0.0,
+                    processing_time_ms=duration_ms,
+                    model_used=self.settings.GROQ_VISION_MODEL
+                )
+
+            except AIProviderError:
+                # JSON parse errors are non-retryable — propagate immediately.
+                raise
+            except Exception as e:
+                error_msg = str(e).lower()
+                status_code = getattr(e, 'status_code', None) or getattr(e, 'status', None)
+                retryable_statuses = {408, 409, 425, 429, 500, 502, 503, 504}
+                is_retryable = (
+                    status_code in retryable_statuses
+                    or "rate limit" in error_msg
+                    or "timeout" in error_msg
+                    or "connection" in error_msg
+                )
+                last_exc = e
+                if is_retryable and attempt < _MAX_ATTEMPTS - 1:
+                    delay = _RETRY_DELAYS_S[attempt]
+                    logger.log_event(
+                        "AI_EXTRACTION", "RETRY", processing_id,
+                        safe_details=f"attempt={attempt + 1}; status={status_code or 'unknown'}; retry_in={delay}s",
+                    )
+                    time.sleep(delay)
+                    continue
                 logger.log_error(
                     "AI_EXTRACTION",
-                    "JSON_PARSE_ERROR",
+                    "API_ERROR",
                     processing_id,
-                    safe_details=str(parse_error),
+                    safe_details=f"type={type(e).__name__}; status={status_code or 'unknown'}; retryable={is_retryable}; attempts={attempt + 1}",
                 )
                 raise AIProviderError(
-                    'groq',
-                    retryable=False,
-                    safe_message='Groq returned invalid structured output',
-                ) from parse_error
+                    'groq', retryable=is_retryable, safe_message='Groq API request failed',
+                ) from e
 
-            duration_ms = int((time.time() - start_time) * 1000)
-            
-            return AIExtractionResult(
-                provider_name=self.name,
-                raw_text=raw_text,
-                fields=fields,
-                confidence=1.0 if fields else 0.0,
-                processing_time_ms=duration_ms,
-                model_used=self.settings.GROQ_VISION_MODEL
-            )
-
-        except Exception as e:
-            error_msg = str(e).lower()
-            status_code = getattr(e, 'status_code', None) or getattr(e, 'status', None)
-            retryable_statuses = {408, 409, 425, 429, 500, 502, 503, 504}
-            retryable = (
-                status_code in retryable_statuses
-                or "rate limit" in error_msg
-                or "timeout" in error_msg
-                or "connection" in error_msg
-            )
-            logger.log_error(
-                "AI_EXTRACTION",
-                "API_ERROR",
-                processing_id,
-                safe_details=f"type={type(e).__name__}; status={status_code or 'unknown'}; retryable={retryable}",
-            )
-            raise AIProviderError('groq', retryable=retryable, safe_message='Groq API request failed') from e
+        # Unreachable in normal flow — satisfies type checkers and linters.
+        raise AIProviderError('groq', retryable=True, safe_message='Groq API retries exhausted') from last_exc
 
     def health_check(self) -> bool:
         if not self.client:
