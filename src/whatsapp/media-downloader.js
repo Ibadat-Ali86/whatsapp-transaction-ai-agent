@@ -96,7 +96,12 @@ async function downloadImage(sock, message, processingId) {
     return { imageBytes: buffer, mimeType, tempPath };
   } catch (error) {
     logger.error({ processingId, err: error }, 'Failed to download media');
-    throw new MediaDownloadError('Failed to download media message', true);
+    const isNonRetryable = Boolean(
+      error &&
+      typeof error.message === 'string' &&
+      error.message.includes('message is not a media message')
+    );
+    throw new MediaDownloadError('Failed to download media message', !isNonRetryable);
   }
 }
 

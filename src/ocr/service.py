@@ -97,7 +97,7 @@ class StripeVerificationRequest(BaseModel):
     received_at: Optional[datetime] = None
     excluded_stripe_charge_ids: list[str] = Field(default_factory=list, max_length=2048)
     currency: str = Field(default="usd", min_length=3, max_length=3)
-    payment_method_type: str = Field(default="cashapp", min_length=1, max_length=32)
+    payment_method_type: Optional[str] = Field(default="cashapp", max_length=32)
 
     @field_validator("email")
     @classmethod
@@ -167,10 +167,12 @@ class StripeVerificationRequest(BaseModel):
             raise ValueError("currency must contain letters only")
         return normalized
 
-    @field_validator("payment_method_type")
+    @field_validator("payment_method_type", mode="before")
     @classmethod
-    def normalize_payment_method_type(cls, value: str) -> str:
-        return value.strip().casefold()
+    def normalize_payment_method_type(cls, value: Optional[str]) -> str:
+        if value is None or not str(value).strip():
+            return "cashapp"
+        return str(value).strip().casefold()
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
