@@ -4,6 +4,34 @@
 
 #### Groq 429 / Timeout Silent Fallback (commit `243d5d8`)
 - **File**: `src/ai/groq_provider.py`
+- Added 3-attempt exponential backoff retry (delays 1s / 2s / 4s). Both HTTP 429 and network-layer timeouts classified as retryable via `_is_retryable()`.
+- Before this fix a single 429 caused silent fall-through to Tesseract, producing low-quality fields and downstream UNCLEAR verdicts.
+
+#### OCR `payment_method_type` Schema Hardening + Non-Media Infinite Retries (commit `1c2dd9d`)
+- **File**: `src/ocr/engine.py`
+- Coerced `payment_method_type` to strict enum set; non-media messages now short-circuit before queue entry, stopping an infinite retry loop.
+
+#### Caption Email TLD Typo Healing (commit `4b28a1b`)
+- **File**: `src/whatsapp/caption-email.js`, function `normalizeCaptionEmail()`
+- Heals `gmail com` and `gmail,com` before RFC-5322 validation. With `caption_email=null`, Stripe searches were unrestricted and hit pagination limits.
+
+#### Month/Day Date Inference from `received_at` (commit `4b28a1b`)
+- **Files**: `src/whatsapp/direct-verification-client.js`, `src/verification/stripe_verifier.py`
+- Synthesises full `payment_date` from `(payment_month, payment_day, received_at.year)` with year-rollback guard. Cash App receipts display only `Tue, Nov 03` — without this, `has_bounded_receipt_window=false` triggered 90-day broad Stripe scans.
+
+#### Cash App User-Facing Receipt ID Exhausts 90-Day Pagination Limit (commit `90cb9af`)
+- **File**: `src/verification/stripe_verifier.py` (secondary recovery loop ~line 1633)
+- Cash App user-facing Payment Identifier (e.g. `DVWJ361R0`) is NOT Stripe internal `transaction_id`. Recovery loop wrapped in `try/except StripePaginationLimitError`; on hit sets `recovery_charges=[]` and falls through to day-bounded candidates.
+- Verified live: `TIMEZONE_BOUNDARY_SINGLE_MATCH py_3UXphrAPeUuGSf6Z1pRarKvt` ✓
+
+---
+
+## [Unreleased] — 2026-11-04
+
+### Fixed
+
+#### Groq 429 / Timeout Silent Fallback (commit `243d5d8`)
+- **File**: `src/ai/groq_provider.py`
 - Added 3-attempt exponential backoff retry (delays 1 s / 2 s / 4 s). Both HTTP 429 and network-layer timeouts classified as retryable via `_is_retryable()`.
 - Before this fix a single 429 caused silent fall-through to Tesseract, producing low-quality fields and downstream UNCLEAR verdicts.
 

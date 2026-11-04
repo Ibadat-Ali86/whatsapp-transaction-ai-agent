@@ -38,7 +38,7 @@ be repaired retroactively.
 
 ## If Groq fails
 Configured behavior:
-- Retry up to 3x with exponential backoff (1 s / 2 s / 4 s) on HTTP 429 or
+- Retry up to 3x with exponential backoff (1s / 2s / 4s) on HTTP 429 or
   network timeout. This is the first line of defense against rate-limit bursts.
 - After 3 failed attempts, preserve the local Tesseract extraction when
   available.
@@ -70,8 +70,8 @@ This verdict means Stripe search exhausted pagination before finding a unique
 match. Common causes and fixes (all resolved as of 2026-11-04):
 
 1. Missing or malformed caption email: caption_email=null causes Stripe to scan
-   all charges. As of commit 4b28a1b, space/comma-separated TLD typos are
-   healed automatically. If email was absent entirely, manual review is needed.
+   all charges. As of commit 4b28a1b, space/comma-separated TLD typos are healed
+   automatically. If email was absent entirely, manual review is needed.
 
 2. Missing payment date: If payment_date=null and no month/day pair exists,
    Stripe performs a 90-day broad scan. As of commit 4b28a1b, month/day pairs
@@ -84,10 +84,11 @@ match. Common causes and fixes (all resolved as of 2026-11-04):
    it means day-bounded candidates were also empty — see causes 1 and 2.
 
 Diagnostic steps:
-  # 1. Find the processing ID
+
+  # 1. Find the processing ID in bot logs
   docker compose -f compose.production.yml logs --tail=500 bot | grep STRIPE_PAGINATION_LIMIT
 
-  # 2. Check what fields OCR returned for that processing ID
+  # 2. Check what fields OCR returned
   docker compose -f compose.production.yml exec bot node -e '
   const fs = require("fs");
   const q = JSON.parse(fs.readFileSync("/app/data/processing-queue.json","utf8"));
@@ -98,7 +99,7 @@ Diagnostic steps:
   # 3. Check OCR container logs for that ID
   docker compose -f compose.production.yml logs --tail=1000 ocr | grep "REPLACE_ID"
 
-## If a valid Cash App payment is stuck in manual review (post 2026-11-04 fix)
+## If a valid Cash App payment is stuck in manual review (post 2026-11-04)
 Run the diagnostic above. Confirm payment_date and caption_email are both
 populated. For Cash App charges in Stripe: receipt_email is NOT set;
 customer is NOT set; billing_details.email IS the matching field.
