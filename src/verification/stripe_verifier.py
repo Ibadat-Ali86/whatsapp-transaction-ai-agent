@@ -1630,11 +1630,16 @@ class StripeVerifier:
                 # The local matcher still requires amount, succeeded status,
                 # currency, and the configured payment method; the identifier
                 # never authorizes an unrelated charge.
-                recovery_charges = await self._charges_for_lookback(
-                    client,
-                    max_pages=self.recovery_max_pages,
-                    target_transaction_id=evidence.transaction_id,
-                )
+                try:
+                    recovery_charges = await self._charges_for_lookback(
+                        client,
+                        max_pages=self.recovery_max_pages,
+                        target_transaction_id=evidence.transaction_id,
+                    )
+                except StripeVerificationError as exc:
+                    if exc.reason_code != "STRIPE_PAGINATION_LIMIT":
+                        raise
+                    recovery_charges = []
                 merged_charges = {
                     charge.get("id"): charge
                     for charge in charges
