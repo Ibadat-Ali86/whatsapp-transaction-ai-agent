@@ -10,7 +10,11 @@ function getImageCaption(message) {
 }
 
 function normalizeCaptionEmail(caption) {
-  const normalized = typeof caption === 'string' ? caption.trim().toLowerCase() : '';
+  if (typeof caption !== 'string' || !caption.trim()) return null;
+  let normalized = caption.trim().toLowerCase();
+
+  // Heal common user typos: space or comma instead of dot before common TLDs (e.g., gmail com -> gmail.com)
+  normalized = normalized.replace(/@([a-zA-Z0-9-]+)[\s,]+(com|net|org|edu|gov|io|co|ai|me)\b/g, '@$1.$2');
   if (EMAIL_PATTERN.test(normalized)) return normalized;
 
   // Captions may contain useful context such as "$2.91" or a note beside

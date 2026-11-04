@@ -940,6 +940,21 @@ class StripeVerifier:
             for value in (evidence.email, *evidence.email_candidates)
             if isinstance(value, str) and value
         }
+        if (
+            evidence.payment_date is None
+            and evidence.payment_month is not None
+            and evidence.payment_day is not None
+            and evidence.received_at is not None
+        ):
+            year = evidence.received_at.year
+            try:
+                candidate = date(year, evidence.payment_month, evidence.payment_day)
+                if candidate > evidence.received_at.date() + timedelta(days=1):
+                    candidate = date(year - 1, evidence.payment_month, evidence.payment_day)
+                evidence = replace(evidence, payment_date=candidate)
+            except ValueError:
+                pass
+
         has_receipt_date = evidence.payment_date is not None or (
             evidence.payment_month is not None and evidence.payment_day is not None
         )
@@ -1049,22 +1064,28 @@ class StripeVerifier:
             # amount/customer cursor from exhausting before the exact receipt
             # identifier is inspected.
             if evidence.transaction_id:
-                charges = (
-                    await self._charges_for_day(
-                        client,
-                        bounded_day_lower_timestamp,
-                        bounded_day_upper_timestamp,
-                        max_pages=self.recovery_max_pages,
-                        target_transaction_id=evidence.transaction_id,
+                try:
+                    charges = (
+                        await self._charges_for_day(
+                            client,
+                            bounded_day_lower_timestamp,
+                            bounded_day_upper_timestamp,
+                            max_pages=self.recovery_max_pages,
+                            target_transaction_id=evidence.transaction_id,
+                        )
+                        if has_bounded_receipt_window
+                        else await self._charges_for_lookback(
+                            client,
+                            max_pages=self.recovery_max_pages,
+                            target_transaction_id=evidence.transaction_id,
+                        )
                     )
-                    if has_bounded_receipt_window
-                    else await self._charges_for_lookback(
-                        client,
-                        max_pages=self.recovery_max_pages,
-                        target_transaction_id=evidence.transaction_id,
-                    )
-                )
-                identifier_scan_hit = bool(charges)
+                    identifier_scan_hit = bool(charges)
+                except StripeVerificationError as exc:
+                    if exc.reason_code != "STRIPE_PAGINATION_LIMIT":
+                        raise
+                    charges = []
+                    identifier_scan_hit = False
 
             # If the exact identifier was not exposed by the selected Stripe
             # API version, retain the existing evidence-based fallbacks. They

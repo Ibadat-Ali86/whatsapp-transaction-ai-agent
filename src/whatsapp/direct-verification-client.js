@@ -97,7 +97,19 @@ function buildStripeVerificationRequest({ ocrResult, job, excludedStripeChargeId
   const captionEmail = validEmail(job?.caption_email);
   const ocrEmail = validEmail(fields.email);
   const emailCandidates = [...new Set([captionEmail, ocrEmail].filter(Boolean))].slice(0, 8);
-  const paymentDate = validDate(fields.payment_date);
+  let paymentDate = validDate(fields.payment_date);
+  const paymentMonth = integerEvidence(fields.payment_month, 1, 12);
+  const paymentDay = integerEvidence(fields.payment_day, 1, 31);
+  if (!paymentDate && paymentMonth && paymentDay && typeof job?.received_at === 'string') {
+    const received = new Date(job.received_at);
+    if (!Number.isNaN(received.getTime())) {
+      let inferredYear = received.getUTCFullYear();
+      const candidateDate = Date.UTC(inferredYear, paymentMonth - 1, paymentDay);
+      const receivedDate = Date.UTC(inferredYear, received.getUTCMonth(), received.getUTCDate());
+      if (candidateDate > receivedDate + 86400000) inferredYear -= 1;
+      paymentDate = `${inferredYear}-${String(paymentMonth).padStart(2, '0')}-${String(paymentDay).padStart(2, '0')}`;
+    }
+  }
   const transactionId = boundedString(fields.transaction_id, 128);
   const normalizedTransactionId = transactionId && TRANSACTION_ID_PATTERN.test(transactionId)
     ? transactionId
